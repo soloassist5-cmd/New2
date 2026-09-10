@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 import config
@@ -61,7 +62,8 @@ def rights_report(rights: dict) -> str:
 
 # ------------------------------------------------------------ подключение ---
 
-async def on_business_connection(connection: dict) -> None:
+async def on_business_connection(connection: dict, *,
+                                 announce: bool = True) -> None:
     connection_id = connection["id"]
     user = connection.get("user") or {}
     user_id = user.get("id")
@@ -81,6 +83,8 @@ async def on_business_connection(connection: dict) -> None:
     log.info("бизнес-подключение %s: пользователь %s, включено=%s",
              connection_id, user_id, enabled)
 
+    if not announce:
+        return
     if not enabled:
         await reporter.send_report(DISCONNECTED)
         return
@@ -108,6 +112,50 @@ async def load_connections() -> None:
     log.info("подключений Business загружено: %s", len(state.business))
 
 
+# ------------------------------------------------- восстановление связки ---
+# Подключение хранится в базе, а на бесплатных хостах диск эфемерный. Telegram
+# присылает business_connection только при изменении подключения, поэтому после
+# передеплоя бот сам себя считает неподключённым. Лечится запросом по id,
+# который приходит с каждым событием из личных чатов.
+
+_relearn_attempt: dict[str, float] = {}
+_relearn_announced = False
+RELEARN_RETRY_SEC = 60
+
+
+async def ensure_connection(api, connection_id: str | None) -> dict | None:
+    global _relearn_announced
+
+    if not connection_id or api is None:
+        return None
+    info = state.business.get(connection_id)
+    if info:
+        return info
+
+    last = _relearn_attempt.get(connection_id, 0)
+    if time.time() - last < RELEARN_RETRY_SEC:
+        return None
+    _relearn_attempt[connection_id] = time.time()
+
+    try:
+        payload = await api.get_business_connection(connection_id)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось перечитать подключение %s: %r", connection_id, e)
+        return None
+
+    await on_business_connection(payload, announce=False)
+    log.info("подключение %s восстановлено после перезапуска", connection_id)
+    if not _relearn_announced:
+        _relearn_announced = True
+        await reporter.send_report(
+            "🔄 **Подключение к личным чатам восстановлено.**\n\n"
+            "База была пуста после перезапуска — я перечитал связку у Telegram. "
+            "Сохранённые ранее удалённые сообщения при этом потерялись; чтобы "
+            "такого не было, пришлите мне последний файл бэкапа."
+        )
+    return state.business.get(connection_id)
+
+
 # --------------------------------------------------------------- сообщения --
 
 async def _cache(message: dict, connection_id: str) -> None:
@@ -130,39 +178,67 @@ async def _cache(message: dict, connection_id: str) -> None:
     )
 
 
-async def _intercept(api, message: dict, connection_id: str) -> None:
-    """Удаляет сообщение замученного и присылает его владельцу."""
+async def _intercept(api, message: dict, connection_id: str, *,
+                     reason: str = "mute") -> bool:
+    """Удаляет сообщение и кладёт его в журнал перехваченного."""
     chat_id = (message.get("chat") or {}).get("id")
     message_id = message["message_id"]
     try:
         await api.delete_business_messages(connection_id, [message_id])
-        # В Business апдейт об удалении всегда несёт chat, а id
-        # нумеруются внутри чата — алиас «без чата» глушил бы чужие.
+        # В Business апдейт об удалении всегда несёт chat, а id нумеруются
+        # внутри чата — алиас «без чата» глушил бы чужие удаления.
         state.mark_own_deletion(chat_id, message_id)
     except Exception as e:                                   # noqa: BLE001
-        log.warning("не удалось удалить сообщение замученного: %r", e)
+        log.warning("не удалось удалить перехваченное сообщение: %r", e)
         if not state.rights_of(connection_id).get("can_delete_all_messages"):
             await reporter.send_report(
-                "⚠️ У бота нет права удалять сообщения собеседника — `.mute` не "
-                "работает. Настройки → Telegram Business → Чат-боты → включите "
-                "удаление сообщений.")
-        return
+                "⚠️ У бота нет права удалять сообщения собеседника — `.mute` и "
+                "режим «не беспокоить» не работают. Настройки → Telegram для "
+                "бизнеса → Чат-боты → включите удаление сообщений.")
+        return False
 
-    if not config.MUTE_LOG:
-        return
     sender = message.get("from") or {}
     media_type, file_id = parse.media_of(message)
-    head = f"🔇 **Перехвачено у замученного** {parse.display_name(sender)}"
+    await db.add_intercepted({
+        "chat_id": chat_id, "msg_id": message_id, "user_id": sender.get("id"),
+        "user_name": parse.display_name(sender), "text": parse.text_of(message),
+        "media_type": media_type, "file_id": file_id,
+        "date": message.get("date") or db.now(),
+    }, reason)
+
+    # По умолчанию молчим: иначе замученный собеседник превращает личку с ботом
+    # в ту же переписку. Всё лежит в журнале — .muted, /intercepted, сводка
+    # при снятии мута.
+    if not config.MUTE_LOG:
+        return True
+
+    head = ("🔇 **Перехвачено у замученного** " if reason == "mute"
+            else "🌙 **Не беспокоить** ") + parse.display_name(sender)
     if media_type:
         head += f"\n{mediastore.KIND_ICON.get(media_type, '📎')} {media_type}"
     body = fmt.truncate(parse.text_of(message), 2000)
     await reporter.send_report(head + (f"\n\n{body}" if body else ""),
                                file_id=file_id, media_type=media_type)
+    return True
+
+
+async def _dnd_reply(api, chat_id: int, user_id: int, connection_id: str) -> None:
+    """Отвечает отправителю от вашего имени — но не чаще раза в час на человека."""
+    last = state.dnd_replied.get(user_id, 0)
+    if time.time() - last < config.DND_REPLY_COOLDOWN:
+        return
+    state.dnd_replied[user_id] = time.time()
+    text = state.dnd_text or config.DND_TEXT
+    try:
+        await api.send_message(chat_id, text, business_connection_id=connection_id)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось ответить в режиме «не беспокоить»: %r", e)
 
 
 async def on_business_message(api, message: dict) -> None:
     connection_id = message.get("business_connection_id")
-    info = state.business.get(connection_id) or {}
+    info = (state.business.get(connection_id)
+            or await ensure_connection(api, connection_id) or {})
     owner_id = info.get("user_id")
     sender = message.get("from") or {}
     chat = message.get("chat") or {}
@@ -178,8 +254,20 @@ async def on_business_message(api, message: dict) -> None:
         await _cache(message, connection_id)
         return
 
+    if not owner_id:
+        # Кто владелец — неизвестно, а значит нельзя отличить его сообщения от
+        # чужих. Удалять вслепую опаснее, чем пропустить: только кэшируем.
+        log.warning("подключение %s не опознано — перехват отключён", connection_id)
+        await _cache(message, connection_id)
+        return
+
     if await state.is_muted(chat.get("id"), sender.get("id")):
-        await _intercept(api, message, connection_id)
+        await _intercept(api, message, connection_id, reason="mute")
+        return
+
+    if await state.dnd_active() and sender.get("id") not in state.allowlist:
+        if await _intercept(api, message, connection_id, reason="dnd"):
+            await _dnd_reply(api, chat.get("id"), sender.get("id"), connection_id)
         return
 
     settings = await _chat_flags(chat.get("id"))
@@ -207,7 +295,7 @@ class _Batch:
 _pending: dict[int, _Batch] = {}
 
 
-async def on_deleted_business_messages(update: dict) -> None:
+async def on_deleted_business_messages(api, update: dict) -> None:
     """Копит удаления и разбирает их пачкой.
 
     Очистка переписки прилетает как сотня id, иногда несколькими апдейтами.
@@ -217,6 +305,7 @@ async def on_deleted_business_messages(update: dict) -> None:
     chat = update.get("chat") or {}
     chat_id = chat.get("id")
     connection_id = update.get("business_connection_id")
+    await ensure_connection(api, connection_id)
     ids = [mid for mid in (update.get("message_ids") or [])
            if not state.was_own_deletion(chat_id, mid)]
     if not ids:
@@ -316,9 +405,10 @@ async def _deleted_card(row, where: str) -> str:
     return "\n".join(lines)
 
 
-async def on_edited_business_message(message: dict) -> None:
+async def on_edited_business_message(api, message: dict) -> None:
     connection_id = message.get("business_connection_id")
-    info = state.business.get(connection_id) or {}
+    info = (state.business.get(connection_id)
+            or await ensure_connection(api, connection_id) or {})
     chat = message.get("chat") or {}
     chat_id, message_id = chat.get("id"), message["message_id"]
 

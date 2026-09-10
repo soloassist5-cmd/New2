@@ -15,13 +15,11 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import parse, transcript
+from bot import digest, parse, transcript
+from bot.editable import BizMessage
 from core import anim, fmt, state
 
 log = logging.getLogger("dotcmd")
-
-NOT_MODIFIED = "message is not modified"
-
 
 @dataclass
 class BizCommand:
@@ -46,25 +44,6 @@ def bizcmd(name: str, *, args: str = "", desc: str = "", visible: bool = False,
             REGISTRY[key] = cmd
         return func
     return wrapper
-
-
-class BizMessage:
-    """Адаптер под core.anim: сообщение бота, отправленное от имени владельца."""
-
-    def __init__(self, api, chat_id: int, message_id: int, connection_id: str):
-        self.api, self.chat_id = api, chat_id
-        self.id, self.connection_id = message_id, connection_id
-
-    async def edit(self, text: str, link_preview: bool = False):
-        try:
-            await self.api.edit_message_text(
-                self.chat_id, self.id, text,
-                business_connection_id=self.connection_id)
-        except Exception as e:                               # noqa: BLE001
-            if NOT_MODIFIED in str(e):
-                return self                                  # кадр совпал с прошлым
-            raise
-        return self
 
 
 @dataclass
@@ -157,7 +136,9 @@ MUTED_OTHER = "🔇 **{who} замучен(а) на {period}.**"
 MUTED_FOREVER_OTHER = "🔇 **{who} замучен(а) на неопределённый срок.**"
 
 
-async def _mute(ctx: BizCtx, *, global_: bool) -> None:
+@bizcmd("mute", args="[reply|id] [10m|2h|1d] [причина] [-all]", visible=True,
+        desc="замутить собеседника: его новые сообщения удаляются у всех")
+async def cmd_mute(ctx: BizCtx) -> None:
     user_id, who, rest = await ctx.target()
     if user_id is None:
         await ctx.fail("Кого мутим? Ответьте на сообщение или укажите id.")
@@ -167,69 +148,64 @@ async def _mute(ctx: BizCtx, *, global_: bool) -> None:
         return
     if not ctx.can("can_delete_all_messages"):
         await ctx.fail("У бота нет права удалять сообщения собеседника. "
-                       "Настройки → Telegram Business → Чат-боты → включите его.")
+                       "Настройки → Telegram для бизнеса → Чат-боты → включите его.")
         return
 
+    everywhere = bool({"all", "everywhere"} & ctx.flags)
     seconds = fmt.parse_duration(rest[0]) if rest else None
     reason = " ".join(rest[1:] if (rest and seconds is not None) else rest)
     seconds = seconds or 0
     until = int(time.time()) + seconds if seconds else 0
-    await state.mute_user(0 if global_ else ctx.chat_id, user_id, until, reason)
+    await state.mute_user(0 if everywhere else ctx.chat_id, user_id, until, reason)
 
     is_peer = user_id == ctx.chat_id
     if seconds:
         period = fmt.human_delta(seconds)
         text = (MUTED_SELF if is_peer else MUTED_OTHER).format(who=who, period=period)
     else:
-        text = (MUTED_FOREVER_SELF if is_peer
-                else MUTED_FOREVER_OTHER).format(who=who)
-    if global_:
+        text = (MUTED_FOREVER_SELF if is_peer else MUTED_FOREVER_OTHER).format(who=who)
+    if everywhere:
         text += "\n_(во всех чатах)_"
     if reason:
         text += f"\n_Причина: {reason}_"
     await ctx.notice(text)
 
 
-@bizcmd("mute", args="[reply|id] [10m|2h|1d] [причина]", visible=True,
-        desc="замутить собеседника: его новые сообщения удаляются у всех")
-async def cmd_mute(ctx: BizCtx) -> None:
-    await _mute(ctx, global_=False)
-
-
-@bizcmd("gmute", args="[reply|id] [срок]", visible=True,
-        desc="замутить во всех личных чатах сразу")
-async def cmd_gmute(ctx: BizCtx) -> None:
-    await _mute(ctx, global_=True)
-
-
-async def _unmute(ctx: BizCtx, *, global_: bool) -> None:
+@bizcmd("unmute", args="[reply|id]", visible=True, desc="снять мут в этом чате")
+async def cmd_unmute(ctx: BizCtx) -> None:
     user_id, who, _ = await ctx.target()
     if user_id is None:
         await ctx.fail("Кого размутить?")
         return
-    existed = await state.unmute_user(0 if global_ else ctx.chat_id, user_id)
-    if not existed and not global_:
-        existed = await state.unmute_user(0, user_id)
+
+    mute = (await db.get_mute(ctx.chat_id, user_id)) or (await db.get_mute(0, user_id))
+    since = mute["created_at"] if mute else 0
+    existed = await state.unmute_user(ctx.chat_id, user_id)
+    existed = await state.unmute_user(0, user_id) or existed
     if not existed:
         await ctx.fail("Этот пользователь и не был замучен.")
         return
+
     text = ("🔊 **С вас снят мут. Можете писать.**" if user_id == ctx.chat_id
             else f"🔊 **С {who} снят мут.**")
     await ctx.notice(text, icon="🔊")
+    await mute_digest(user_id, who, since)
 
 
-@bizcmd("unmute", args="[reply|id]", visible=True, desc="снять мут в этом чате")
-async def cmd_unmute(ctx: BizCtx) -> None:
-    await _unmute(ctx, global_=False)
-
-
-@bizcmd("ungmute", args="[reply|id]", visible=True, desc="снять глобальный мут")
-async def cmd_ungmute(ctx: BizCtx) -> None:
-    await _unmute(ctx, global_=True)
+async def mute_digest(user_id: int, who: str, since: int) -> None:
+    """Что человек написал, пока был замучен."""
+    rows = await db.intercepted(user_id, since=since, reason="mute", limit=500)
+    if rows:
+        await digest.deliver(rows, title=f"🔇 **Пока {who} был(а) замучен(а)**",
+                             empty="", chat_title=who)
 
 
 @bizcmd("mutelist", desc="список активных мутов", aliases=["mutes"])
 async def cmd_mutelist(ctx: BizCtx) -> None:
+    await ctx.private(await mute_list_text())
+
+
+async def mute_list_text() -> str:
     rows = await db.all_mutes()
     now = int(time.time())
     lines = ["🔇 **Активные муты**", ""]
@@ -240,8 +216,102 @@ async def cmd_mutelist(ctx: BizCtx) -> None:
         left = ("бессрочно" if not row["until"]
                 else f"ещё {fmt.human_delta(row['until'] - now)}")
         lines.append(f"• `{row['user_id']}` — {scope}, {left}")
-    await ctx.private("🔇 Список мутов пуст." if len(lines) == 2
-                      else fmt.truncate("\n".join(lines), 3500))
+    return "🔇 Список мутов пуст." if len(lines) == 2 else fmt.truncate(
+        "\n".join(lines), 3500)
+
+
+# ------------------------------------------------------- не беспокоить -----
+
+@bizcmd("gmute", args="[срок] [текст ответа]", aliases=["dnd"],
+        desc="режим «не беспокоить»: удалять сообщения всех подряд")
+async def cmd_gmute(ctx: BizCtx) -> None:
+    if not ctx.can("can_delete_all_messages"):
+        await ctx.fail("У бота нет права удалять сообщения собеседника — "
+                       "режим «не беспокоить» работать не будет.")
+        return
+    seconds = fmt.parse_duration(ctx.args[0]) if ctx.args else None
+    rest = ctx.args[1:] if seconds is not None else ctx.args
+    await enable_dnd(seconds or 0, " ".join(rest))
+    await ctx.private(dnd_enabled_text(seconds or 0))
+
+
+@bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
+async def cmd_ungmute(ctx: BizCtx) -> None:
+    if not await state.dnd_active():
+        await ctx.fail("Режим «не беспокоить» и так выключен.")
+        return
+    since = state.dnd_since
+    await state.clear_dnd()
+    await ctx.private("☀️ **Режим «не беспокоить» выключен.** "
+                      "Сообщения снова доходят.")
+    await dnd_digest(since)
+
+
+async def enable_dnd(seconds: int, text: str) -> None:
+    until = int(time.time()) + seconds if seconds else 0
+    await state.set_dnd(until, text.strip() or config.DND_TEXT)
+
+
+def dnd_enabled_text(seconds: int) -> str:
+    period = f"на {fmt.human_delta(seconds)}" if seconds else "бессрочно"
+    return (f"🌙 **Режим «не беспокоить» включён** {period}.\n\n"
+            f"Сообщения от всех будут удаляться, отправитель получит от вашего "
+            f"имени:\n_{state.dnd_text or config.DND_TEXT}_\n\n"
+            f"Исключения — белый список (`{config.PREFIX}allowed`). "
+            f"Выключить: `{config.PREFIX}ungmute`.")
+
+
+async def dnd_digest(since: int) -> None:
+    rows = await db.intercepted(since=since, reason="dnd", limit=500)
+    await digest.deliver(rows, title="🌙 **Пока вас не беспокоили**",
+                         empty="🌙 За это время вам никто не писал.")
+
+
+@bizcmd("allow", args="[reply|id]",
+        desc="пропускать этого человека в «не беспокоить»")
+async def cmd_allow(ctx: BizCtx) -> None:
+    user_id, who, _ = await ctx.target()
+    if user_id is None:
+        await ctx.fail("Кого пропускать? Ответьте на сообщение или укажите id.")
+        return
+    await state.allow_user(user_id, who)
+    await ctx.private(f"✅ {who} (`{user_id}`) теперь проходит сквозь режим "
+                      f"«не беспокоить».")
+
+
+@bizcmd("deny", args="[reply|id]", desc="убрать из белого списка")
+async def cmd_deny(ctx: BizCtx) -> None:
+    user_id, who, _ = await ctx.target()
+    if user_id is None:
+        await ctx.fail("Кого убрать?")
+        return
+    removed = await state.deny_user(user_id)
+    await ctx.private(f"🚫 {who} убран(а) из белого списка." if removed
+                      else "Его и не было в белом списке.")
+
+
+@bizcmd("allowed", desc="белый список «не беспокоить»")
+async def cmd_allowed(ctx: BizCtx) -> None:
+    await ctx.private(await allowed_text())
+
+
+async def allowed_text() -> str:
+    rows = await db.allowed_users()
+    if not rows:
+        return "✅ Белый список пуст — в режиме «не беспокоить» удаляются все."
+    lines = ["✅ **Белый список**", ""]
+    lines += [f"• {row['name'] or '—'} (`{row['user_id']}`)" for row in rows]
+    return fmt.truncate("\n".join(lines), 3500)
+
+
+@bizcmd("muted", args="[N]", desc="что перехвачено мутом и «не беспокоить»")
+async def cmd_muted(ctx: BizCtx) -> None:
+    limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 20
+    rows = await db.intercepted(limit=max(1, min(limit, 200)))
+    await ctx.drop_command()
+    await digest.deliver(rows, title="🔇 **Перехваченные сообщения**",
+                         empty="🔇 Пока ничего не перехвачено.",
+                         owner_id=ctx.owner_id)
 
 
 # ---------------------------------------------------------------- чистка ----

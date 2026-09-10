@@ -180,7 +180,11 @@ async def run() -> None:
 
     await db.init()
     await state.load_mutes()
-    log.info("мутов загружено: %s", len(state.mutes))
+    await state.load_dnd()
+    await state.load_allowlist()
+    log.info("мутов загружено: %s, белый список: %s, «не беспокоить»: %s",
+             len(state.mutes), len(state.allowlist),
+             "включён" if state.dnd_until is not None else "выключен")
 
     api = await start_bot()
     if client is None and api is None:

@@ -46,23 +46,41 @@ NOT_CONNECTED = (
     "До этого мне не видно ни одного чата."
 )
 
+ALREADY_LINKED_HINT = (
+    "\n\n_Если вы меня уже подключали, а я этого не вижу — так бывает после "
+    "передеплоя на хостинге с временным диском. Напишите что-нибудь в любом "
+    "личном чате: я перечитаю связку у Telegram и подхвачу её сам._"
+)
+
 HELP = (
     "**Здесь:**\n"
-    "/status — состояние и права\n"
+    "/gmute [срок] [текст] — «не беспокоить»: удалять сообщения всех подряд\n"
+    "/ungmute — выключить\n"
+    "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
+    "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
     "/deleted [N] — последние удалённые\n"
-    "/mutes — активные муты\n"
-    "/unmute <id> — снять мут\n"
+    "/find <текст> — поиск по всему сохранённому\n"
+    "/mutes, /unmute <id> — муты\n"
+    "/export — весь журнал файлом\n"
+    "/status — состояние и права\n"
     "/backup — прислать базу файлом\n"
     "/connect — инструкция по подключению\n\n"
     "**В самих переписках** (пишете вы, от своего имени):\n"
-    "`{p}mute` · `{p}unmute` · `{p}del` · `{p}purge` · `{p}deleted` · `{p}help`"
+    "`{p}mute` · `{p}unmute` · `{p}gmute` · `{p}allow` · `{p}del` · `{p}purge` · "
+    "`{p}deleted` · `{p}muted` · `{p}export` · `{p}help`"
 )
 
 MENU = (
-    ("status", "состояние и права"),
+    ("gmute", "не беспокоить: удалять сообщения всех"),
+    ("ungmute", "выключить «не беспокоить»"),
+    ("intercepted", "что перехвачено"),
     ("deleted", "последние удалённые сообщения"),
+    ("find", "поиск по сохранённому: /find текст"),
+    ("allowed", "белый список"),
     ("mutes", "активные муты"),
     ("unmute", "снять мут: /unmute <id>"),
+    ("export", "весь журнал файлом"),
+    ("status", "состояние и права"),
     ("backup", "прислать базу файлом"),
     ("connect", "как подключить к личным чатам"),
     ("help", "справка"),
@@ -99,7 +117,8 @@ async def cmd_start(api, message: dict, _args: str) -> None:
         return
     await api.send_message(
         chat_id,
-        WELCOME + CONNECT_STEPS.format(bot=bot_mention(), p=config.PREFIX))
+        WELCOME + CONNECT_STEPS.format(bot=bot_mention(), p=config.PREFIX)
+        + ALREADY_LINKED_HINT)
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
@@ -129,9 +148,17 @@ async def cmd_status(api, message: dict, _args: str) -> None:
         f"🗑 удалённых сохранено: {stats['deleted']}",
         f"✏️ правок: {stats['edits']}",
         f"🔇 мутов: {stats['mutes']}",
+        f"🔒 перехвачено: {stats['intercepted']}",
         f"💾 база: {fmt.size(stats['size'])}",
         "",
     ]
+    if await state.dnd_active():
+        left = ("бессрочно" if not state.dnd_until
+                else f"ещё {fmt.human_delta(state.dnd_until - int(time.time()))}")
+        lines.append(f"🌙 **Не беспокоить: включён** ({left})")
+        lines.append(f"_Ответ:_ {state.dnd_text or config.DND_TEXT}")
+        lines.append(f"✅ в белом списке: {stats['allowed']}")
+        lines.append("")
     if connected():
         lines.append("🔗 **Подключено к личным чатам**")
         for info in state.business.values():
@@ -140,6 +167,8 @@ async def cmd_status(api, message: dict, _args: str) -> None:
                 break
     else:
         lines.append("🔌 **Не подключено.** Инструкция — /connect")
+        lines.append("_Если подключение есть, напишите что-нибудь в личном чате — "
+                     "я его перечитаю._")
     if state.client is not None:
         lines.append("\n👤 Юзербот-режим активен: работают и групповые чаты.")
     await api.send_message(chat_id, "\n".join(lines))
@@ -192,6 +221,109 @@ async def cmd_unmute(api, message: dict, args: str) -> None:
         await state.unmute_user(scope, user_id)
     await api.send_message(chat_id, f"🔊 Мутов снято: **{len(removed)}**." if removed
                            else "Этот пользователь не был замучен.")
+
+
+async def cmd_gmute(api, message: dict, args: str) -> None:
+    from bot import dotcmd, editable
+
+    chat_id = message["chat"]["id"]
+    tokens = args.split()
+    seconds = fmt.parse_duration(tokens[0]) if tokens else None
+    rest = tokens[1:] if seconds is not None else tokens
+    await dotcmd.enable_dnd(seconds or 0, " ".join(rest))
+    await editable.animated(api, chat_id, dotcmd.dnd_enabled_text(seconds or 0),
+                            icon="🌙")
+
+
+async def cmd_ungmute(api, message: dict, _args: str) -> None:
+    from bot import dotcmd, editable
+
+    chat_id = message["chat"]["id"]
+    if not await state.dnd_active():
+        await api.send_message(chat_id, "Режим «не беспокоить» и так выключен.")
+        return
+    since = state.dnd_since
+    await state.clear_dnd()
+    await editable.animated(
+        api, chat_id,
+        "☀️ **Режим «не беспокоить» выключен.** Сообщения снова доходят.",
+        icon="☀️")
+    await dotcmd.dnd_digest(since)
+
+
+async def cmd_allow(api, message: dict, args: str) -> None:
+    chat_id = message["chat"]["id"]
+    raw = args.strip()
+    if not re.fullmatch(r"-?\d+", raw):
+        await api.send_message(chat_id, "Использование: `/allow 123456789`\n"
+                                        "id можно взять из `.id` в нужном чате.")
+        return
+    await state.allow_user(int(raw), raw)
+    await api.send_message(chat_id, f"✅ `{raw}` проходит сквозь «не беспокоить».")
+
+
+async def cmd_deny(api, message: dict, args: str) -> None:
+    chat_id = message["chat"]["id"]
+    raw = args.strip()
+    if not re.fullmatch(r"-?\d+", raw):
+        await api.send_message(chat_id, "Использование: `/deny 123456789`")
+        return
+    removed = await state.deny_user(int(raw))
+    await api.send_message(chat_id, f"🚫 `{raw}` убран из белого списка." if removed
+                           else "Его и не было в белом списке.")
+
+
+async def cmd_allowed(api, message: dict, _args: str) -> None:
+    from bot import dotcmd
+
+    await api.send_message(message["chat"]["id"], await dotcmd.allowed_text())
+
+
+async def cmd_intercepted(api, message: dict, args: str) -> None:
+    from bot import digest
+
+    limit = int(args) if args.strip().isdigit() else 20
+    rows = await db.intercepted(limit=max(1, min(limit, 200)))
+    await digest.deliver(rows, title="🔇 **Перехваченные сообщения**",
+                         empty="🔇 Пока ничего не перехвачено.",
+                         owner_id=state.owner_id)
+
+
+async def cmd_find(api, message: dict, args: str) -> None:
+    chat_id = message["chat"]["id"]
+    query = args.strip()
+    if len(query) < 2:
+        await api.send_message(chat_id, "Использование: `/find слово`")
+        return
+    rows = await db.search_deleted(query, limit=20)
+    if not rows:
+        await api.send_message(chat_id, f"🔍 По запросу «{query}» ничего не нашлось.")
+        return
+    kinds = {"deleted": "🗑", "intercepted": "🔇"}
+    out = [f"🔍 **Найдено: {len(rows)}**", ""]
+    for row in rows:
+        out.append(f"{kinds.get(row['kind'], '•')} `{fmt.ts(row['at'])}` "
+                   f"**{row['user_name'] or '—'}**\n"
+                   f"  {fmt.truncate(row['text'] or '', 200)}")
+    await api.send_message(chat_id, fmt.truncate("\n".join(out), 3500))
+
+
+async def cmd_export(api, message: dict, _args: str) -> None:
+    from bot import transcript
+
+    chat_id = message["chat"]["id"]
+    rows = await db.last_deleted(None, 5000)
+    if not rows:
+        await api.send_message(chat_id, "🗑 Журнал пуст.")
+        return
+    ordered = sorted(rows, key=lambda row: (row["date"] or 0, row["msg_id"] or 0))
+    when = db.now()
+    payload, stats = transcript.build(
+        ordered, chat_title="все чаты", owner_id=state.owner_id,
+        requested=len(ordered), when=when, reason="Журнал удалённых сообщений")
+    await api.send_file(chat_id, payload, f"journal_{when}.txt",
+                        caption=f"🗑 **Журнал удалённых**\n"
+                                f"записей: **{stats['recovered']}**")
 
 
 async def cmd_backup(api, message: dict, _args: str) -> None:

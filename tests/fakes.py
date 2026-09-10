@@ -15,6 +15,8 @@ class FakeBotAPI:
         self.delete_ok = delete_ok
         self.downloads: dict[str, bytes] = {}
         self.uploads: list[bytes] = []
+        self.connection = None            # что вернёт getBusinessConnection
+        self.connection_lookups = 0
         self.captions: list[str | None] = []
         self._ids = itertools.count(1000)
 
@@ -48,6 +50,12 @@ class FakeBotAPI:
     async def set_my_commands(self, commands):
         self.commands = commands
         return True
+
+    async def get_business_connection(self, business_connection_id):
+        self.connection_lookups += 1
+        if self.connection is None:
+            raise RuntimeError("Bad Request: business connection not found")
+        return self.connection
 
     async def get_file(self, file_id):
         return {"file_id": file_id, "file_path": f"documents/{file_id}"}

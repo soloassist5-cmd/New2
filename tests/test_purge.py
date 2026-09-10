@@ -29,6 +29,8 @@ def env():
     state.business.clear()
     state.mutes.clear()
     state.forget_own_deletions()
+    asyncio.run(state.load_dnd())        # состояние режимов живёт
+    asyncio.run(state.load_allowlist())  # в модуле, а не только в БД
     state.client = None
     state.log_entity = None
     state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
@@ -64,7 +66,7 @@ def talk(count, *, start=1, photo_every=0):
 
 
 def purge(ids):
-    asyncio.run(business.on_deleted_business_messages(deleted_update(ids)))
+    asyncio.run(business.on_deleted_business_messages(state.api, deleted_update(ids)))
 
 
 # --------------------------------------------------------------- пороги -----
@@ -171,8 +173,8 @@ def test_updates_within_the_window_merge_into_one_report():
     state.api.sent.clear()
 
     async def scenario():
-        await business.on_deleted_business_messages(deleted_update(range(1, 7)))
-        await business.on_deleted_business_messages(deleted_update(range(7, 13)))
+        await business.on_deleted_business_messages(state.api, deleted_update(range(1, 7)))
+        await business.on_deleted_business_messages(state.api, deleted_update(range(7, 13)))
         assert state.api.files == [], "пока окно не закрылось — ничего не шлём"
         await business.flush_pending()
 
@@ -187,8 +189,8 @@ def test_split_updates_below_threshold_stay_cards():
     state.api.sent.clear()
 
     async def scenario():
-        await business.on_deleted_business_messages(deleted_update([1, 2]))
-        await business.on_deleted_business_messages(deleted_update([3]))
+        await business.on_deleted_business_messages(state.api, deleted_update([1, 2]))
+        await business.on_deleted_business_messages(state.api, deleted_update([3]))
         await business.flush_pending()
 
     asyncio.run(scenario())
@@ -211,8 +213,8 @@ def test_duplicate_ids_counted_once():
     state.api.sent.clear()
 
     async def scenario():
-        await business.on_deleted_business_messages(deleted_update(range(1, 13)))
-        await business.on_deleted_business_messages(deleted_update(range(1, 13)))
+        await business.on_deleted_business_messages(state.api, deleted_update(range(1, 13)))
+        await business.on_deleted_business_messages(state.api, deleted_update(range(1, 13)))
         await business.flush_pending()
 
     asyncio.run(scenario())

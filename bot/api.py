@@ -147,6 +147,10 @@ class BotAPI:
             parse_mode="HTML" if caption else None,
         )
 
+    async def get_business_connection(self, business_connection_id: str) -> dict:
+        return await self.call("getBusinessConnection",
+                               business_connection_id=business_connection_id)
+
     async def delete_business_messages(self, business_connection_id: str,
                                        message_ids: list[int]) -> bool:
         return await self.call("deleteBusinessMessages",

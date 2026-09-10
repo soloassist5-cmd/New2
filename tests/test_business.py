@@ -38,6 +38,8 @@ def env():
     state.business.clear()
     state.mutes.clear()
     state.forget_own_deletions()
+    asyncio.run(state.load_dnd())        # состояние режимов живёт
+    asyncio.run(state.load_allowlist())  # в модуле, а не только в БД
     state.client = None
     state.log_entity = None
     state.owner_id = 0
@@ -129,20 +131,40 @@ def test_ignored_chat_is_not_cached():
 
 # ------------------------------------------------------------------- мут ----
 
-def test_muted_message_is_deleted_and_reported():
+def test_muted_message_is_deleted_silently_but_saved():
+    """Замученный собеседник не должен превращать личку с ботом в ту же переписку."""
     api = connect()
+    api.sent.clear()
     asyncio.run(state.mute_user(PEER, PEER, 0))
     incoming(text="спам", message_id=50)
+
     assert api.deleted == [(BIZ, [50])]
-    assert any("Перехвачено" in text for text in api.texts)
-    assert state.was_own_deletion(PEER, 50), "своё удаление не идёт в журнал"
+    assert api.sent == [], "мгновенных уведомлений быть не должно"
+    assert state.was_own_deletion(PEER, 50), "своё удаление не идёт в журнал удалений"
+
+    saved = asyncio.run(db.intercepted(PEER))
+    assert len(saved) == 1 and saved[0]["text"] == "спам"
+    assert saved[0]["reason"] == "mute"
 
 
-def test_intercepted_media_reaches_the_owner():
+def test_live_notifications_can_be_turned_back_on():
+    config.MUTE_LOG = True
+    try:
+        api = connect()
+        asyncio.run(state.mute_user(PEER, PEER, 0))
+        incoming(text="спам", message_id=50)
+        assert any("Перехвачено" in text for text in api.texts)
+    finally:
+        config.MUTE_LOG = False
+
+
+def test_intercepted_media_is_saved_with_file_id():
     api = connect()
     asyncio.run(state.mute_user(PEER, PEER, 0))
     incoming(text="", message_id=51, photo="AgACspam")
-    assert api.media and api.media[0][1] == "AgACspam"
+    saved = asyncio.run(db.intercepted(PEER))
+    assert saved[0]["file_id"] == "AgACspam" and saved[0]["media_type"] == "фото"
+    assert api.media == [], "картинку тоже не шлём сразу"
 
 
 def test_missing_delete_right_is_explained_once():
@@ -171,7 +193,7 @@ def deleted_update(ids, chat_id=PEER):
 def test_deletion_produces_a_report():
     api = connect()
     incoming(text="секрет", message_id=60)
-    asyncio.run(business.on_deleted_business_messages(deleted_update([60])))
+    asyncio.run(business.on_deleted_business_messages(state.api, deleted_update([60])))
     report = api.texts[-1]
     assert "Удалённое сообщение" in report and "секрет" in report
     assert asyncio.run(db.get_message(PEER, 60)) is None, "из кэша убрали"
@@ -181,14 +203,14 @@ def test_deletion_produces_a_report():
 def test_deleted_photo_is_resent_by_file_id():
     api = connect()
     incoming(text="", message_id=61, photo="AgACgone")
-    asyncio.run(business.on_deleted_business_messages(deleted_update([61])))
+    asyncio.run(business.on_deleted_business_messages(state.api, deleted_update([61])))
     assert api.media and api.media[-1][1] == "AgACgone"
 
 
 def test_unknown_message_id_is_skipped():
     api = connect()
     before = len(api.sent)
-    asyncio.run(business.on_deleted_business_messages(deleted_update([999])))
+    asyncio.run(business.on_deleted_business_messages(state.api, deleted_update([999])))
     assert len(api.sent) == before
 
 
@@ -200,7 +222,7 @@ def test_own_deletion_in_one_chat_does_not_silence_another():
     incoming(text="важное", message_id=63, chat_id=other, from_id=other)
     state.mark_own_deletion(PEER, 63)          # своё удаление в другом чате
     asyncio.run(business.on_deleted_business_messages(
-        deleted_update([63], chat_id=other)))
+        state.api, deleted_update([63], chat_id=other)))
     assert any("важное" in text for text in api.texts)
 
 
@@ -209,7 +231,7 @@ def test_own_deletions_do_not_produce_reports():
     incoming(text="спам", message_id=62)
     state.mark_own_deletion(PEER, 62, private=True)
     before = len(api.sent)
-    asyncio.run(business.on_deleted_business_messages(deleted_update([62])))
+    asyncio.run(business.on_deleted_business_messages(state.api, deleted_update([62])))
     assert len(api.sent) == before
 
 
@@ -219,7 +241,7 @@ def test_edit_is_reported_with_both_versions():
     api = connect()
     incoming(text="было", message_id=70)
     edited = business_message(text="стало", message_id=70)
-    asyncio.run(business.on_edited_business_message(edited))
+    asyncio.run(business.on_edited_business_message(state.api, edited))
     report = api.texts[-1]
     assert "Было:" in report and "было" in report and "стало" in report
     assert asyncio.run(db.get_message(PEER, 70))["text"] == "стало"
@@ -230,5 +252,5 @@ def test_edit_without_text_change_is_silent():
     incoming(text="одно и то же", message_id=71)
     before = len(api.sent)
     asyncio.run(business.on_edited_business_message(
-        business_message(text="одно и то же", message_id=71)))
+        state.api, business_message(text="одно и то же", message_id=71)))
     assert len(api.sent) == before

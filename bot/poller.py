@@ -29,9 +29,10 @@ async def dispatch(api, update: dict) -> None:
     elif "business_message" in update:
         await business.on_business_message(api, update["business_message"])
     elif "edited_business_message" in update:
-        await business.on_edited_business_message(update["edited_business_message"])
+        await business.on_edited_business_message(api, update["edited_business_message"])
     elif "deleted_business_messages" in update:
-        await business.on_deleted_business_messages(update["deleted_business_messages"])
+        await business.on_deleted_business_messages(
+            api, update["deleted_business_messages"])
     elif "message" in update:
         await commands.handle(api, update["message"])
 

@@ -82,6 +82,30 @@ CREATE TABLE IF NOT EXISTS kv (
     v TEXT
 );
 
+-- Что бот удалил за нас: мут конкретного человека или режим «не беспокоить».
+-- Живёт отдельно от deleted: это не чужие удаления, а наши перехваты.
+CREATE TABLE IF NOT EXISTS intercepted (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER,
+    msg_id     INTEGER,
+    user_id    INTEGER,
+    user_name  TEXT,
+    text       TEXT,
+    media_type TEXT,
+    file_id    TEXT,
+    date       INTEGER,
+    at         INTEGER NOT NULL,
+    reason     TEXT NOT NULL DEFAULT 'mute'
+);
+CREATE INDEX IF NOT EXISTS idx_intercepted_user ON intercepted(user_id, at);
+
+-- Кого «не беспокоить» пропускает.
+CREATE TABLE IF NOT EXISTS allowlist (
+    user_id  INTEGER PRIMARY KEY,
+    name     TEXT,
+    added_at INTEGER NOT NULL
+);
+
 -- Подключения Telegram Business: бот, добавленный в Настройки -> Telegram
 -- Business -> Чат-боты, получает права на личные чаты владельца.
 CREATE TABLE IF NOT EXISTS business (
@@ -306,12 +330,92 @@ async def add_mute(chat_id: int, user_id: int, until: int, reason: str = "") -> 
     )
 
 
+async def get_mute(chat_id: int, user_id: int):
+    return await fetchone("SELECT * FROM mutes WHERE chat_id=? AND user_id=?",
+                          (chat_id, user_id))
+
+
 async def remove_mute(chat_id: int, user_id: int) -> None:
     await execute("DELETE FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
 
 
 async def all_mutes():
     return await fetchall("SELECT * FROM mutes")
+
+
+# ------------------------------------------------------------- перехваты ----
+
+async def add_intercepted(row: dict, reason: str = "mute") -> None:
+    await execute(
+        """INSERT INTO intercepted(chat_id,msg_id,user_id,user_name,text,
+                                   media_type,file_id,date,at,reason)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (row.get("chat_id"), row.get("msg_id"), row.get("user_id"),
+         row.get("user_name"), row.get("text"), row.get("media_type"),
+         row.get("file_id"), row.get("date"), now(), reason),
+    )
+
+
+async def intercepted(user_id: int | None = None, *, since: int = 0,
+                      reason: str | None = None, limit: int = 50):
+    where, params = ["at >= ?"], [since]
+    if user_id is not None:
+        where.append("user_id = ?")
+        params.append(user_id)
+    if reason is not None:
+        where.append("reason = ?")
+        params.append(reason)
+    params.append(limit)
+    return await fetchall(
+        f"SELECT * FROM intercepted WHERE {' AND '.join(where)} "
+        f"ORDER BY at DESC LIMIT ?", params)
+
+
+async def count_intercepted(user_id: int | None = None, *, since: int = 0) -> int:
+    if user_id is None:
+        return await scalar("SELECT COUNT(*) FROM intercepted WHERE at >= ?", (since,))
+    return await scalar(
+        "SELECT COUNT(*) FROM intercepted WHERE user_id=? AND at >= ?",
+        (user_id, since))
+
+
+# ------------------------------------------------------------ белый список --
+
+async def allow(user_id: int, name: str) -> None:
+    await execute("INSERT INTO allowlist(user_id,name,added_at) VALUES (?,?,?) "
+                  "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name",
+                  (user_id, name, now()))
+
+
+async def disallow(user_id: int) -> bool:
+    row = await fetchone("SELECT user_id FROM allowlist WHERE user_id=?", (user_id,))
+    await execute("DELETE FROM allowlist WHERE user_id=?", (user_id,))
+    return row is not None
+
+
+async def allowed_users():
+    return await fetchall("SELECT * FROM allowlist ORDER BY added_at")
+
+
+# ---------------------------------------------------------------- поиск -----
+
+def _escape_like(query: str) -> str:
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def search_deleted(query: str, limit: int = 20):
+    """Поиск по журналу удалённых и перехваченных."""
+    pattern = f"%{_escape_like(query)}%"
+    return await fetchall(
+        """SELECT chat_id, user_id, user_name, text, media_type, file_id,
+                  date, deleted_at AS at, 'deleted' AS kind
+             FROM deleted   WHERE text LIKE ? ESCAPE '\\'
+           UNION ALL
+           SELECT chat_id, user_id, user_name, text, media_type, file_id,
+                  date, at, 'intercepted' AS kind
+             FROM intercepted WHERE text LIKE ? ESCAPE '\\'
+           ORDER BY at DESC LIMIT ?""",
+        (pattern, pattern, limit))
 
 
 # ---------------------------------------------------------------- business ---
@@ -412,6 +516,7 @@ async def cleanup() -> tuple[int, int]:
     cur = await conn().execute("DELETE FROM deleted WHERE deleted_at < ?", (cutoff2,))
     b = cur.rowcount or 0
     await conn().execute("DELETE FROM edits WHERE edited_at < ?", (cutoff2,))
+    await conn().execute("DELETE FROM intercepted WHERE at < ?", (cutoff2,))
     await conn().commit()
     return a, b
 
@@ -424,5 +529,7 @@ async def stats() -> dict:
         "mutes": await scalar("SELECT COUNT(*) FROM mutes"),
         "notes": await scalar("SELECT COUNT(*) FROM notes"),
         "business": await scalar("SELECT COUNT(*) FROM business WHERE is_enabled=1"),
+        "intercepted": await scalar("SELECT COUNT(*) FROM intercepted"),
+        "allowed": await scalar("SELECT COUNT(*) FROM allowlist"),
         "size": config.DB_PATH.stat().st_size if config.DB_PATH.exists() else 0,
     }

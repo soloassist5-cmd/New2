@@ -30,6 +30,9 @@ def env():
     invalidate_all()
     state.business.clear()
     state.mutes.clear()
+    state.forget_own_deletions()
+    asyncio.run(state.load_dnd())
+    asyncio.run(state.load_allowlist())
     state.client = None
     state.owner_id = 0
     state.owner_chat_id = 0

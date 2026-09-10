@@ -26,6 +26,8 @@ def env():
     config.ANIM_DELAY = 0
     state.mutes.clear()
     state.forget_own_deletions()
+    asyncio.run(state.load_dnd())        # состояние режимов живёт
+    asyncio.run(state.load_allowlist())  # в модуле, а не только в БД
     state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
     state.business.clear()
     state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER_CHAT,
@@ -75,9 +77,10 @@ def test_quiet_flag_skips_animation():
     assert len(api.edits) == 1
 
 
-def test_gmute_marks_all_chats():
-    run(".gmute", message_id=13)
+def test_mute_all_flag_covers_every_chat():
+    run(".mute -all", message_id=13)
     assert (0, PEER) in state.mutes
+    assert "во всех чатах" in state.api.edits[-1][2]
 
 
 def test_mute_needs_the_delete_right():
