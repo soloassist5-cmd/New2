@@ -1,5 +1,7 @@
-# Render Blueprint: подключите репозиторий в дашборде -> Blueprints -> New.
+# Render Blueprint: дашборд -> Blueprints -> New Blueprint Instance -> репозиторий.
 # Секреты (sync: false) задаются один раз в UI и не попадают в git.
+# WEBHOOK_URL указывать не нужно: подхватится RENDER_EXTERNAL_URL, и бот сам
+# переключится с long polling на вебхук.
 services:
   - type: web
     name: tg-guard
@@ -26,7 +28,8 @@ services:
         value: type
       - key: ANIM_DELAY
         value: "0.4"
-      # Диск на free-плане эфемерный: база едет в Telegram и оттуда же поднимается.
+      # Диск на free-плане эфемерный: бот присылает копию базы себе в чат,
+      # обратная пересылка файла её восстанавливает.
       - key: BACKUP_EVERY_MIN
         value: "30"
       - key: RESTORE_ON_START

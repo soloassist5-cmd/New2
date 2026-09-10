@@ -21,7 +21,7 @@ from logging.handlers import RotatingFileHandler
 
 import config
 import db
-import health
+import web
 from bot import business, commands, poller
 from bot.api import BotAPI
 from core import backup, dispatcher, fmt, reporter, state
@@ -114,6 +114,27 @@ async def start_bot():
     return api
 
 
+async def start_transport(api, stop: asyncio.Event) -> list[asyncio.Task]:
+    """Вебхук, если задан публичный адрес, иначе long polling."""
+    if config.use_webhook():
+        url = config.WEBHOOK_URL + config.webhook_path()
+        try:
+            await api.set_webhook(url, config.webhook_secret(),
+                                  poller.ALLOWED_UPDATES)
+            log.info("вебхук установлен: %s", url)
+            return []
+        except Exception as e:                               # noqa: BLE001
+            log.error("не удалось установить вебхук (%r) — падаю на long polling", e)
+
+    try:
+        # Оставшийся вебхук молча блокирует getUpdates.
+        await api.delete_webhook()
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("deleteWebhook: %r", e)
+    log.info("режим long polling")
+    return [asyncio.create_task(poller.run(api, stop))]
+
+
 async def announce_restart() -> None:
     """Дописывает «перезапущен» к сообщению, из которого вызвали .restart."""
     chat = await db.kv_get("restart_chat")
@@ -165,17 +186,18 @@ async def run() -> None:
         log.error("не удалось запустить ни один режим")
         sys.exit(1)
 
-    runner = await health.start()
+    runner = await web.start()
     tasks = [asyncio.create_task(backup.loop())]
     stop = asyncio.Event()
     if api is not None:
-        tasks.append(asyncio.create_task(poller.run(api, stop)))
+        tasks.extend(await start_transport(api, stop))
 
     await announce_restart()
     log.info("режимы: %s", describe_modes())
     await reporter.send_report(
         f"🛡 **Guard запущен**\n"
         f"{describe_modes()}\n"
+        f"📡 транспорт: {'вебхук' if config.use_webhook() else 'long polling'}\n"
         f"⌨️ префикс `{config.PREFIX}`\n"
         f"🔇 мутов восстановлено: {len(state.mutes)}"
     )

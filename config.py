@@ -1,6 +1,7 @@
 """Конфигурация из окружения / .env."""
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -76,6 +77,34 @@ RESTORE_ON_START: bool = _bool("RESTORE_ON_START", True)
 BACKUP_TAG = "#guard_backup"
 
 PORT: int = _int("PORT", 8080)
+
+# Публичный адрес сервиса. Если задан — бот работает через вебхук вместо
+# long polling: бесплатные тарифы почти везде именно web service, и держать
+# на них постоянный опрос — воевать с площадкой.
+# RENDER_EXTERNAL_URL Render подставляет сам — на нём настраивать нечего.
+WEBHOOK_URL: str = (
+    os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
+).strip().rstrip("/")
+# Telegram шлёт его в заголовке X-Telegram-Bot-Api-Secret-Token.
+WEBHOOK_SECRET: str = (os.getenv("WEBHOOK_SECRET", "") or "").strip()
+
+
+def webhook_secret() -> str:
+    """Секрет вебхука. Если не задан — выводим из токена, он и так секретный."""
+    if WEBHOOK_SECRET:
+        return WEBHOOK_SECRET
+    digest = hashlib.sha256(BOT_TOKEN.encode()).hexdigest()
+    return digest[:32]
+
+
+def webhook_path() -> str:
+    """Путь считаем от токена, а не от секрета: URL светится в логах и прокси."""
+    digest = hashlib.sha256(f"{BOT_TOKEN}:webhook-path".encode()).hexdigest()
+    return f"/tg/{digest[:24]}"
+
+
+def use_webhook() -> bool:
+    return bool(BOT_TOKEN and WEBHOOK_URL)
 
 
 

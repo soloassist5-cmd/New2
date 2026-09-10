@@ -159,6 +159,19 @@ class BotAPI:
     async def set_my_commands(self, commands: list[dict]) -> bool:
         return await self.call("setMyCommands", commands=commands)
 
+    async def set_webhook(self, url: str, secret_token: str,
+                          allowed_updates: list[str]) -> bool:
+        return await self.call("setWebhook", url=url, secret_token=secret_token,
+                               allowed_updates=allowed_updates,
+                               drop_pending_updates=False,
+                               max_connections=20)
+
+    async def delete_webhook(self) -> bool:
+        return await self.call("deleteWebhook", drop_pending_updates=False)
+
+    async def get_webhook_info(self) -> dict:
+        return await self.call("getWebhookInfo")
+
     async def get_file(self, file_id: str) -> dict:
         return await self.call("getFile", file_id=file_id)
 
