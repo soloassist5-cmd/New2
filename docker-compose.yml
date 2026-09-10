@@ -1,0 +1,15 @@
+services:
+  guard:
+    build: .
+    container_name: tg-guard
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - ./data:/app/data          # база и логи переживают пересборку
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

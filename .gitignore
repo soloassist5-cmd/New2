@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.env
+*.session
+*.session-journal
+data/
+*.sqlite3
+*.sqlite3-*
+.venv/
+venv/
+.idea/
+.vscode/

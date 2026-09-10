@@ -1,0 +1,33 @@
+# Fly.io: fly launch --no-deploy, затем секреты через `fly secrets set`.
+app = "tg-guard"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  BACKUP_EVERY_MIN = "60"
+  RESTORE_ON_START = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false      # юзербот должен жить постоянно
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[mounts]
+  source = "guard_data"
+  destination = "/app/data"

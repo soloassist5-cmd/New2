@@ -1,0 +1,31 @@
+# Render Blueprint: подключите репозиторий в дашборде -> Blueprints -> New.
+# Секреты (sync: false) задаются один раз в UI и не попадают в git.
+services:
+  - type: web
+    name: tg-guard
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SESSION
+        sync: false
+      - key: LOG_CHAT
+        sync: false
+      - key: PREFIX
+        value: "."
+      - key: MUTE_ANIM
+        value: type
+      - key: ANIM_DELAY
+        value: "0.4"
+      # Диск на free-плане эфемерный: база едет в Telegram и оттуда же поднимается.
+      - key: BACKUP_EVERY_MIN
+        value: "30"
+      - key: RESTORE_ON_START
+        value: "1"
