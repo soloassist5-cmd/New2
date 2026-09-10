@@ -22,6 +22,8 @@ services:
         sync: false
       - key: SESSION
         sync: false
+      - key: OWNER_ID
+        sync: false
       - key: PREFIX
         value: "."
       - key: MUTE_ANIM

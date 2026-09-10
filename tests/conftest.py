@@ -13,4 +13,5 @@ os.environ.setdefault("API_ID", "1")
 os.environ.setdefault("API_HASH", "0" * 32)
 os.environ.setdefault("SESSION", "test-session")
 os.environ.setdefault("ANIM_DELAY", "0")
+os.environ["OWNER_ID"] = "0"      # администратора тесты задают сами
 os.environ["DB_PATH"] = str(Path(tempfile.mkdtemp()) / "test.sqlite3")
