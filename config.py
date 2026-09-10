@@ -70,6 +70,11 @@ LOG_OWN: bool = _bool("LOG_OWN", False)            # логировать сво
 
 MUTE_ANIM: str = (os.getenv("MUTE_ANIM", "type") or "type").strip().lower()
 MUTE_LOG: bool = _bool("MUTE_LOG", True)          # писать перехваченное в лог-чат
+
+# Массовое удаление (очистка переписки) — одним файлом вместо сотни карточек.
+PURGE_THRESHOLD: int = _int("PURGE_THRESHOLD", 5)
+PURGE_DEBOUNCE_SEC: float = _float("PURGE_DEBOUNCE_SEC", 3.0)
+PURGE_MEDIA_LIMIT: int = _int("PURGE_MEDIA_LIMIT", 10)
 ANIM_DELAY: float = _float("ANIM_DELAY", 0.4)
 
 BACKUP_EVERY_MIN: int = _int("BACKUP_EVERY_MIN", 60)

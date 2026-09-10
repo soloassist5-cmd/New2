@@ -235,6 +235,29 @@ async def find_private_message(msg_id: int):
     )
 
 
+async def get_messages(chat_id: int, msg_ids: list[int]):
+    """Сообщения чата по списку id, по порядку. SQLite ограничивает число
+    подстановок в запросе, поэтому идём частями."""
+    found = []
+    for start in range(0, len(msg_ids), 400):
+        chunk = msg_ids[start:start + 400]
+        placeholders = ",".join("?" * len(chunk))
+        found += await fetchall(
+            f"SELECT * FROM messages WHERE chat_id=? AND msg_id IN ({placeholders})",
+            (chat_id, *chunk))
+    return sorted(found, key=lambda row: (row["date"], row["msg_id"]))
+
+
+async def drop_messages(chat_id: int, msg_ids: list[int]) -> None:
+    for start in range(0, len(msg_ids), 400):
+        chunk = msg_ids[start:start + 400]
+        placeholders = ",".join("?" * len(chunk))
+        await conn().execute(
+            f"DELETE FROM messages WHERE chat_id=? AND msg_id IN ({placeholders})",
+            (chat_id, *chunk))
+    await conn().commit()
+
+
 async def drop_message(chat_id: int, msg_id: int) -> None:
     await execute("DELETE FROM messages WHERE chat_id=? AND msg_id=?", (chat_id, msg_id))
 

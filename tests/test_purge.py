@@ -1,0 +1,234 @@
+"""Очистка переписки: одна сводка с файлом вместо сотни карточек."""
+import asyncio
+
+import pytest
+
+import config
+import db
+from bot import business, transcript
+from core import state
+from tests.fakes import ALL_RIGHTS, FakeBotAPI, business_message
+
+OWNER = 111
+OWNER_CHAT = 111
+PEER = 777
+BIZ = "biz1"
+
+
+@pytest.fixture(autouse=True)
+def env():
+    from modules.antidelete import invalidate_all
+
+    config.DB_PATH.unlink(missing_ok=True)
+    asyncio.run(db.init())
+    invalidate_all()
+    config.PURGE_DEBOUNCE_SEC = 0
+    config.PURGE_THRESHOLD = 5
+    config.PURGE_MEDIA_LIMIT = 10
+    business._pending.clear()
+    state.business.clear()
+    state.mutes.clear()
+    state.forget_own_deletions()
+    state.client = None
+    state.log_entity = None
+    state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
+    state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER_CHAT,
+                           "is_enabled": True, "rights": dict(ALL_RIGHTS)}
+    state.api = FakeBotAPI()
+    yield
+    asyncio.run(db.close())
+    state.api = None
+    business._pending.clear()
+
+
+def deleted_update(ids):
+    return {"business_connection_id": BIZ,
+            "chat": {"id": PEER, "type": "private", "first_name": "Вася"},
+            "message_ids": list(ids)}
+
+
+def talk(count, *, start=1, photo_every=0):
+    """Наполняет чат перепиской: чётные сообщения — от владельца."""
+    async def fill():
+        for offset in range(count):
+            msg_id = start + offset
+            kwargs = {"message_id": msg_id, "date": 1700000000 + offset * 60}
+            if offset % 2:
+                kwargs["from_id"] = OWNER
+                kwargs["first_name"] = "Владелец"
+            if photo_every and offset % photo_every == 0:
+                kwargs["photo"] = f"AgAC{msg_id}"
+            await business.on_business_message(
+                state.api, business_message(f"сообщение {msg_id}", **kwargs))
+    asyncio.run(fill())
+
+
+def purge(ids):
+    asyncio.run(business.on_deleted_business_messages(deleted_update(ids)))
+
+
+# --------------------------------------------------------------- пороги -----
+
+def test_few_deletions_stay_separate_cards():
+    talk(3)
+    state.api.sent.clear()
+    purge([1, 2, 3])
+    assert state.api.files == [], "файл ради трёх сообщений не нужен"
+    assert sum("Удалённое сообщение" in text for text in state.api.texts) == 3
+
+
+def test_mass_deletion_produces_one_file_and_one_summary():
+    talk(12)
+    state.api.sent.clear()
+    purge(range(1, 13))
+
+    assert len(state.api.files) == 1, "ровно один файл"
+    chat_id, name = state.api.files[0]
+    assert chat_id == OWNER_CHAT and name.endswith(".txt")
+    assert not [t for t in state.api.texts if "Удалённое сообщение" in t], \
+        "поштучных карточек быть не должно"
+
+
+def test_summary_counts_everything():
+    talk(12)
+    state.api.sent.clear()
+    purge(range(1, 13))
+    summary = state.api.captions[0]
+    assert "Переписка очищена" in summary
+    assert "**12**" in summary and "Вася" in summary
+
+
+def test_messages_move_to_the_journal():
+    talk(12)
+    purge(range(1, 13))
+    assert len(asyncio.run(db.last_deleted(PEER, 100))) == 12
+    assert asyncio.run(db.get_message(PEER, 1)) is None, "кэш вычищен"
+
+
+# ------------------------------------------------------------ содержимое ----
+
+def transcript_text():
+    return state.api.uploads[0].decode("utf-8")
+
+
+def test_transcript_keeps_order_and_authors():
+    talk(12)
+    purge(range(1, 13))
+    text = transcript_text()
+    assert text.index("сообщение 1") < text.index("сообщение 12"), "по времени"
+    assert "Вася" in text and "Вы" in text, "свои сообщения подписаны иначе"
+
+
+def test_transcript_marks_media():
+    talk(12, photo_every=4)
+    purge(range(1, 13))
+    assert "<фото>" in transcript_text()
+
+
+def test_transcript_reports_what_was_not_cached():
+    """Часть переписки старше TTL или пришла до подключения бота."""
+    talk(6)
+    state.api.sent.clear()
+    purge(range(1, 21))                 # удалили 20, в кэше только 6
+    text = transcript_text()
+    assert "Удалено сообщений: 20" in text
+    assert "Восстановлено из кэша: 6" in text
+    assert "Не было в кэше: 14" in text
+    assert "не было в кэше: 14" in state.api.captions[0]
+
+
+def test_empty_cache_still_reports_the_purge():
+    purge(range(1, 30))
+    assert len(state.api.files) == 1
+    assert "не сохранилось" in transcript_text()
+
+
+# ----------------------------------------------------------------- медиа ----
+
+def test_media_is_resent_after_the_file():
+    talk(12, photo_every=3)
+    state.api.sent.clear()
+    purge(range(1, 13))
+    assert state.api.media, "вложения приходят следом за файлом"
+    assert all(item[1].startswith("AgAC") for item in state.api.media)
+
+
+def test_media_flood_is_capped():
+    config.PURGE_MEDIA_LIMIT = 3
+    talk(12, photo_every=1)
+    state.api.sent.clear()
+    purge(range(1, 13))
+    assert len(state.api.media) == 3
+    assert "присылаю 3" in state.api.captions[0]
+
+
+# --------------------------------------------------------------- пачками ----
+
+def test_updates_within_the_window_merge_into_one_report():
+    """Telegram дробит очистку на несколько апдейтов — сводка должна быть одна."""
+    config.PURGE_DEBOUNCE_SEC = 5
+    talk(12)
+    state.api.sent.clear()
+
+    async def scenario():
+        await business.on_deleted_business_messages(deleted_update(range(1, 7)))
+        await business.on_deleted_business_messages(deleted_update(range(7, 13)))
+        assert state.api.files == [], "пока окно не закрылось — ничего не шлём"
+        await business.flush_pending()
+
+    asyncio.run(scenario())
+    assert len(state.api.files) == 1
+    assert "**12**" in state.api.captions[0], "пачки сложились"
+
+
+def test_split_updates_below_threshold_stay_cards():
+    config.PURGE_DEBOUNCE_SEC = 5
+    talk(4)
+    state.api.sent.clear()
+
+    async def scenario():
+        await business.on_deleted_business_messages(deleted_update([1, 2]))
+        await business.on_deleted_business_messages(deleted_update([3]))
+        await business.flush_pending()
+
+    asyncio.run(scenario())
+    assert state.api.files == []
+    assert sum("Удалённое сообщение" in text for text in state.api.texts) == 3
+
+
+def test_own_deletions_are_not_counted():
+    talk(12)
+    state.api.sent.clear()
+    for msg_id in range(1, 13):
+        state.mark_own_deletion(PEER, msg_id, private=True)
+    purge(range(1, 13))
+    assert state.api.sent == [] and state.api.files == []
+
+
+def test_duplicate_ids_counted_once():
+    config.PURGE_DEBOUNCE_SEC = 5
+    talk(12)
+    state.api.sent.clear()
+
+    async def scenario():
+        await business.on_deleted_business_messages(deleted_update(range(1, 13)))
+        await business.on_deleted_business_messages(deleted_update(range(1, 13)))
+        await business.flush_pending()
+
+    asyncio.run(scenario())
+    assert "**12**" in state.api.captions[0], "повтор апдейта не удваивает счёт"
+
+
+# ------------------------------------------------------------- сборщик -----
+
+def test_transcript_builder_stats():
+    rows = [{"date": 100, "msg_id": 1, "user_id": 5, "user_name": "Вася",
+             "text": "привет", "media_type": None},
+            {"date": 200, "msg_id": 2, "user_id": OWNER, "user_name": "Я",
+             "text": "", "media_type": "фото"}]
+    payload, stats = transcript.build(rows, chat_title="Вася", owner_id=OWNER,
+                                      requested=5, when=300)
+    assert stats == {"requested": 5, "recovered": 2, "missing": 3, "media": 1,
+                     "first": 100, "last": 200}
+    text = payload.decode("utf-8")
+    assert "привет" in text and "<фото>" in text and "Вы" in text

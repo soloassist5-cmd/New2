@@ -70,6 +70,10 @@ def mark_own_deletion(chat_id: int, *msg_ids: int, private: bool = False) -> Non
         _own_deletions.popitem(last=False)
 
 
+def forget_own_deletions() -> None:
+    _own_deletions.clear()
+
+
 def was_own_deletion(chat_id: int | None, msg_id: int) -> bool:
     key = (chat_id if chat_id is not None else 0, msg_id)
     if key in _own_deletions:

@@ -33,8 +33,11 @@ def env():
     config.DB_PATH.unlink(missing_ok=True)
     asyncio.run(db.init())
     invalidate_all()          # кэш настроек живёт в модуле и переживает пересоздание БД
+    config.PURGE_DEBOUNCE_SEC = 0     # в тестах разбираем удаления сразу
+    business._pending.clear()
     state.business.clear()
     state.mutes.clear()
+    state.forget_own_deletions()
     state.client = None
     state.log_entity = None
     state.owner_id = 0
@@ -187,6 +190,18 @@ def test_unknown_message_id_is_skipped():
     before = len(api.sent)
     asyncio.run(business.on_deleted_business_messages(deleted_update([999])))
     assert len(api.sent) == before
+
+
+def test_own_deletion_in_one_chat_does_not_silence_another():
+    """В Business id сообщений нумеруются внутри чата и пересекаются между
+    чатами, поэтому «своё удаление» нельзя запоминать без chat_id."""
+    other = 888
+    api = connect()
+    incoming(text="важное", message_id=63, chat_id=other, from_id=other)
+    state.mark_own_deletion(PEER, 63)          # своё удаление в другом чате
+    asyncio.run(business.on_deleted_business_messages(
+        deleted_update([63], chat_id=other)))
+    assert any("важное" in text for text in api.texts)
 
 
 def test_own_deletions_do_not_produce_reports():

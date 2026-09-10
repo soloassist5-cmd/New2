@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 import time
@@ -209,6 +210,10 @@ async def run() -> None:
             await stop.wait()
     finally:
         stop.set()
+        if api is not None:
+            # Успеть разобрать удаления, зависшие в окне ожидания.
+            with contextlib.suppress(Exception):
+                await business.flush_pending()
         for task in tasks:
             task.cancel()
         if runner is not None:

@@ -274,26 +274,28 @@ async def cmd_restore(ctx: Ctx) -> None:
 @command("export", args="", cat=CAT,
          desc="выгрузить журнал удалённых этого чата файлом")
 async def cmd_export(ctx: Ctx) -> None:
+    from bot import transcript
+
     rows = await db.last_deleted(ctx.chat_id, 5000)
     if not rows:
         await ctx.fail("Нечего выгружать.")
         return
-    buf = io.StringIO()
-    buf.write(f"Журнал удалённых сообщений — чат {ctx.chat_id}\n")
-    buf.write(f"Выгружено: {fmt.ts(db.now())}\nВсего: {len(rows)}\n\n")
-    for row in reversed(rows):
-        who = await _name(row["user_id"])
-        buf.write(f"[{fmt.ts(row['deleted_at'])}] {who} ({row['user_id']})\n")
-        if row["media_type"]:
-            buf.write(f"  <{row['media_type']}>\n")
-        if row["text"]:
-            buf.write(f"  {row['text']}\n")
-        buf.write("\n")
-    data = io.BytesIO(buf.getvalue().encode("utf-8"))
-    data.name = f"deleted_{ctx.chat_id}.txt"
+    # Юзербот имён в журнал не пишет — подставляем их здесь, по разрешённым id.
+    ordered = [dict(row) for row in sorted(rows, key=lambda r: (r["date"], r["msg_id"]))]
+    for row in ordered:
+        if not row.get("user_name"):
+            row["user_name"] = await _name(row["user_id"])
+    when = db.now()
+    payload, _ = transcript.build(
+        ordered, chat_title=await _name(ctx.chat_id),
+        owner_id=state.me.id if state.me else None,
+        requested=len(ordered), when=when, reason="Журнал удалённых сообщений")
+
+    data = io.BytesIO(payload)
+    data.name = transcript.filename(ctx.chat_id, when)
     await ctx.msg.delete()
     await ctx.client.send_file(ctx.chat_id, data,
-                               caption=f"🗑 Журнал удалённых: {len(rows)} шт.")
+                               caption=f"🗑 Журнал удалённых: {len(ordered)} шт.")
 
 
 def setup(client) -> None:

@@ -14,6 +14,8 @@ class FakeBotAPI:
         self.commands: list[dict] | None = None
         self.delete_ok = delete_ok
         self.downloads: dict[str, bytes] = {}
+        self.uploads: list[bytes] = []
+        self.captions: list[str | None] = []
         self._ids = itertools.count(1000)
 
     async def send_message(self, chat_id, text, *, business_connection_id=None,
@@ -33,6 +35,8 @@ class FakeBotAPI:
 
     async def send_file(self, chat_id, data, filename, *, caption=None):
         self.files.append((chat_id, filename))
+        self.uploads.append(data)
+        self.captions.append(caption)
         return {"message_id": next(self._ids)}
 
     async def delete_business_messages(self, business_connection_id, message_ids):

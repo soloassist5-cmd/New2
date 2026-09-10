@@ -25,6 +25,7 @@ def env():
     invalidate_all()
     config.ANIM_DELAY = 0
     state.mutes.clear()
+    state.forget_own_deletions()
     state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
     state.business.clear()
     state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER_CHAT,

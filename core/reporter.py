@@ -48,6 +48,30 @@ async def _via_bot(text: str, file_id: str | None, media_type: str | None) -> bo
         return False
 
 
+async def send_document(payload: bytes, filename: str, caption: str) -> bool:
+    """Файл владельцу тем же маршрутом, что и обычные отчёты."""
+    if state.api is not None and state.owner_chat_id:
+        try:
+            await state.api.send_file(state.owner_chat_id, payload, filename,
+                                      caption=caption)
+            state.bot_blocked = False
+            return True
+        except Exception as e:                               # noqa: BLE001
+            log.warning("бот не смог отправить файл: %r", e)
+            await _warn_once()
+
+    if state.log_entity is None or state.client is None:
+        return False
+    try:
+        import io
+        buf = io.BytesIO(payload)
+        buf.name = filename
+        return await mediastore.send_log(caption, file=buf) is not None
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось отправить файл в лог-чат: %r", e)
+        return False
+
+
 async def send_report(text: str, *, file_id: str | None = None,
                       media_type: str | None = None,
                       media_ref: int | None = None) -> bool:

@@ -6,12 +6,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 
 import config
 import db
-from bot import dotcmd, parse
+from bot import dotcmd, parse, transcript
 from core import fmt, mediastore, reporter, state
 
 log = logging.getLogger("business")
@@ -134,7 +136,9 @@ async def _intercept(api, message: dict, connection_id: str) -> None:
     message_id = message["message_id"]
     try:
         await api.delete_business_messages(connection_id, [message_id])
-        state.mark_own_deletion(chat_id, message_id, private=True)
+        # В Business апдейт об удалении всегда несёт chat, а id
+        # нумеруются внутри чата — алиас «без чата» глушил бы чужие.
+        state.mark_own_deletion(chat_id, message_id)
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось удалить сообщение замученного: %r", e)
         if not state.rights_of(connection_id).get("can_delete_all_messages"):
@@ -191,20 +195,110 @@ async def _chat_flags(chat_id: int) -> dict:
 
 # ---------------------------------------------------------------- удаления --
 
+@dataclass
+class _Batch:
+    """Удаления по одному чату, собранные за короткое окно."""
+    connection_id: str
+    chat: dict
+    ids: list[int] = field(default_factory=list)
+    task: asyncio.Task | None = None
+
+
+_pending: dict[int, _Batch] = {}
+
+
 async def on_deleted_business_messages(update: dict) -> None:
+    """Копит удаления и разбирает их пачкой.
+
+    Очистка переписки прилетает как сотня id, иногда несколькими апдейтами.
+    Карточка на каждое — это флуд-лимит и нечитаемая лента, поэтому решение
+    принимается по всей пачке.
+    """
     chat = update.get("chat") or {}
     chat_id = chat.get("id")
-    for message_id in update.get("message_ids") or []:
-        if state.was_own_deletion(chat_id, message_id):
-            continue
-        row = await db.get_message(chat_id, message_id)
-        if row is None:
-            continue
+    connection_id = update.get("business_connection_id")
+    ids = [mid for mid in (update.get("message_ids") or [])
+           if not state.was_own_deletion(chat_id, mid)]
+    if not ids:
+        return
+
+    batch = _pending.get(chat_id)
+    if batch is None:
+        batch = _Batch(connection_id=connection_id, chat=chat)
+        _pending[chat_id] = batch
+    batch.ids.extend(ids)
+    batch.chat = chat or batch.chat
+
+    if batch.task is not None and not batch.task.done():
+        batch.task.cancel()
+    if config.PURGE_DEBOUNCE_SEC > 0:
+        batch.task = asyncio.create_task(_flush_after_pause(chat_id))
+    else:
+        await flush(chat_id)
+
+
+async def _flush_after_pause(chat_id: int) -> None:
+    try:
+        await asyncio.sleep(config.PURGE_DEBOUNCE_SEC)
+    except asyncio.CancelledError:
+        return                      # пришла ещё пачка — ждём дальше
+    try:
+        await flush(chat_id)
+    except Exception:               # noqa: BLE001
+        log.exception("не удалось разобрать удаления чата %s", chat_id)
+
+
+async def flush_pending() -> None:
+    """Разбирает всё накопленное — при остановке процесса и в тестах."""
+    for chat_id in list(_pending):
+        await flush(chat_id)
+
+
+async def flush(chat_id: int) -> None:
+    batch = _pending.pop(chat_id, None)
+    if batch is None:
+        return
+    if batch.task is not None and not batch.task.done():
+        batch.task.cancel()
+
+    ids = list(dict.fromkeys(batch.ids))
+    rows = await db.get_messages(chat_id, ids)
+    where = parse.chat_title(batch.chat)
+
+    if len(ids) < config.PURGE_THRESHOLD:
+        for row in rows:
+            await db.add_deleted(dict(row))
+            await reporter.send_report(await _deleted_card(row, where),
+                                       file_id=row["file_id"],
+                                       media_type=row["media_type"])
+        await db.drop_messages(chat_id, [row["msg_id"] for row in rows])
+        return
+
+    await _report_purge(chat_id, batch, rows, ids, where)
+
+
+async def _report_purge(chat_id: int, batch: _Batch, rows, ids: list[int],
+                        where: str) -> None:
+    when = db.now()
+    owner_id = (state.business.get(batch.connection_id) or {}).get("user_id")
+    payload, stats = transcript.build(rows, chat_title=where, owner_id=owner_id,
+                                      requested=len(ids), when=when)
+    with_media = [row for row in rows if row["file_id"]][:config.PURGE_MEDIA_LIMIT]
+
+    await reporter.send_document(
+        payload, transcript.filename(chat_id, when),
+        transcript.summary(where, stats, media_sent=len(with_media)))
+
+    for row in rows:
         await db.add_deleted(dict(row))
+    await db.drop_messages(chat_id, [row["msg_id"] for row in rows])
+
+    for row in with_media:
+        icon = mediastore.KIND_ICON.get(row["media_type"], "📎")
         await reporter.send_report(
-            await _deleted_card(row, parse.chat_title(chat)),
+            f"{icon} {row['media_type']} · {fmt.ts(row['date'])} · "
+            f"{row['user_name'] or '—'}",
             file_id=row["file_id"], media_type=row["media_type"])
-        await db.drop_message(chat_id, message_id)
 
 
 async def _deleted_card(row, where: str) -> str:

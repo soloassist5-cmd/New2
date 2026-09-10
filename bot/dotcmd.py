@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import parse
+from bot import parse, transcript
 from core import anim, fmt, state
 
 log = logging.getLogger("dotcmd")
@@ -99,7 +99,7 @@ class BizCtx:
         try:
             await self.api.delete_business_messages(self.connection_id,
                                                     [self.message_id])
-            state.mark_own_deletion(self.chat_id, self.message_id, private=True)
+            state.mark_own_deletion(self.chat_id, self.message_id)
             return True
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось убрать команду из переписки: %r", e)
@@ -254,7 +254,7 @@ async def cmd_del(ctx: BizCtx) -> None:
     ids = [ctx.reply["message_id"], ctx.message_id]
     try:
         await ctx.api.delete_business_messages(ctx.connection_id, ids)
-        state.mark_own_deletion(ctx.chat_id, *ids, private=True)
+        state.mark_own_deletion(ctx.chat_id, *ids)
     except Exception as e:                                   # noqa: BLE001
         await ctx.fail(f"Не удалось удалить: `{type(e).__name__}`")
 
@@ -270,7 +270,7 @@ async def cmd_purge(ctx: BizCtx) -> None:
         batch = ids[start:start + 100]
         try:
             await ctx.api.delete_business_messages(ctx.connection_id, batch)
-            state.mark_own_deletion(ctx.chat_id, *batch, private=True)
+            state.mark_own_deletion(ctx.chat_id, *batch)
             removed += len(batch)
         except Exception as e:                               # noqa: BLE001
             log.warning("пачка не удалилась: %r", e)
@@ -317,6 +317,27 @@ async def cmd_deleted(ctx: BizCtx) -> None:
         out.append(f"• `{fmt.ts(row['deleted_at'])}` **{row['user_name'] or '—'}**\n"
                    f"  {preview}")
     await ctx.private(fmt.truncate("\n".join(out), 3500))
+
+
+@bizcmd("export", desc="выгрузить журнал удалённых этого чата файлом")
+async def cmd_export(ctx: BizCtx) -> None:
+    from core import reporter
+
+    rows = await db.last_deleted(ctx.chat_id, 5000)
+    await ctx.drop_command()
+    if not rows:
+        await ctx.private("🗑 В этом чате нечего выгружать.")
+        return
+    ordered = sorted(rows, key=lambda row: (row["date"], row["msg_id"]))
+    when = db.now()
+    payload, stats = transcript.build(
+        ordered, chat_title=parse.display_name(ctx.message.get("chat")),
+        owner_id=ctx.owner_id, requested=len(ordered), when=when,
+        reason="Журнал удалённых сообщений")
+    await reporter.send_document(
+        payload, transcript.filename(ctx.chat_id, when),
+        f"🗑 **Журнал удалённых**\n💬 {parse.display_name(ctx.message.get('chat'))}\n"
+        f"записей: **{len(ordered)}**")
 
 
 # ------------------------------------------------------------------ инфо ----
