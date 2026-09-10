@@ -184,7 +184,7 @@ async def run() -> None:
     await state.load_allowlist()
     log.info("мутов загружено: %s, белый список: %s, «не беспокоить»: %s",
              len(state.mutes), len(state.allowlist),
-             "включён" if state.dnd_until is not None else "выключен")
+             "включён" if state.dnd_active() else "выключен")
 
     api = await start_bot()
     if client is None and api is None:

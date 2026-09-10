@@ -5,7 +5,7 @@ import pytest
 
 import config
 import db
-from bot import commands
+from bot import commands, dotcmd  # noqa: F401
 from core import state
 from tests.fakes import ALL_RIGHTS, FakeBotAPI
 
@@ -236,3 +236,31 @@ def test_menu_is_published():
     asyncio.run(commands.publish_menu(state.api))
     names = {item["command"] for item in state.api.commands}
     assert {"status", "deleted", "connect", "help"} <= names
+
+
+# ------------------------------------------------- регистрация команд ------
+# Команда, объявленная функцией, но не попавшая в HANDLERS, молча не работает —
+# ровно так /gmute и восемь других команд однажды оказались мёртвыми.
+
+def test_every_command_function_is_registered():
+    functions = {value for name, value in vars(commands).items()
+                 if name.startswith("cmd_") and callable(value)}
+    assert functions - set(commands.HANDLERS.values()) == set()
+
+
+def test_every_menu_entry_has_a_handler():
+    assert [name for name, _ in commands.MENU if name not in commands.HANDLERS] == []
+
+
+def test_documented_commands_are_routable():
+    """Всё, что упомянуто в справке, должно доходить до обработчика."""
+    import re as _re
+    mentioned = set(_re.findall(r"/(\w+)", commands.HELP))
+    assert mentioned <= set(commands.HANDLERS), mentioned - set(commands.HANDLERS)
+
+
+@pytest.mark.parametrize("command", sorted({name for name, _ in commands.MENU}))
+def test_each_menu_command_answers(command):
+    connected()
+    api = run(f"/{command} тест")
+    assert api.sent or api.files, f"/{command} не ответил"

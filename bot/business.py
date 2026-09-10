@@ -228,7 +228,7 @@ async def _dnd_reply(api, chat_id: int, user_id: int, connection_id: str) -> Non
     if time.time() - last < config.DND_REPLY_COOLDOWN:
         return
     state.dnd_replied[user_id] = time.time()
-    text = state.dnd_text or config.DND_TEXT
+    text = config.DND_TEXT
     try:
         await api.send_message(chat_id, text, business_connection_id=connection_id)
     except Exception as e:                                   # noqa: BLE001
@@ -265,7 +265,7 @@ async def on_business_message(api, message: dict) -> None:
         await _intercept(api, message, connection_id, reason="mute")
         return
 
-    if await state.dnd_active() and sender.get("id") not in state.allowlist:
+    if state.dnd_active() and sender.get("id") not in state.allowlist:
         if await _intercept(api, message, connection_id, reason="dnd"):
             await _dnd_reply(api, chat.get("id"), sender.get("id"), connection_id)
         return

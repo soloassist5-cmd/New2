@@ -54,7 +54,7 @@ ALREADY_LINKED_HINT = (
 
 HELP = (
     "**Здесь:**\n"
-    "/gmute [срок] [текст] — «не беспокоить»: удалять сообщения всех подряд\n"
+    "/gmute — «не беспокоить»: удалять сообщения всех подряд\n"
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
@@ -152,11 +152,10 @@ async def cmd_status(api, message: dict, _args: str) -> None:
         f"💾 база: {fmt.size(stats['size'])}",
         "",
     ]
-    if await state.dnd_active():
-        left = ("бессрочно" if not state.dnd_until
-                else f"ещё {fmt.human_delta(state.dnd_until - int(time.time()))}")
-        lines.append(f"🌙 **Не беспокоить: включён** ({left})")
-        lines.append(f"_Ответ:_ {state.dnd_text or config.DND_TEXT}")
+    if state.dnd_active():
+        spent = fmt.uptime(time.time() - state.dnd_since) if state.dnd_since else "—"
+        lines.append(f"🌙 **Не беспокоить: включён** (уже {spent})")
+        lines.append(f"_Ответ:_ {config.DND_TEXT}")
         lines.append(f"✅ в белом списке: {stats['allowed']}")
         lines.append("")
     if connected():
@@ -223,31 +222,27 @@ async def cmd_unmute(api, message: dict, args: str) -> None:
                            else "Этот пользователь не был замучен.")
 
 
-async def cmd_gmute(api, message: dict, args: str) -> None:
+async def cmd_gmute(api, message: dict, _args: str) -> None:
     from bot import dotcmd, editable
 
     chat_id = message["chat"]["id"]
-    tokens = args.split()
-    seconds = fmt.parse_duration(tokens[0]) if tokens else None
-    rest = tokens[1:] if seconds is not None else tokens
-    await dotcmd.enable_dnd(seconds or 0, " ".join(rest))
-    await editable.animated(api, chat_id, dotcmd.dnd_enabled_text(seconds or 0),
-                            icon="🌙")
+    if state.dnd_active():
+        await api.send_message(chat_id, dotcmd.dnd_enabled_text())
+        return
+    await state.set_dnd()
+    await editable.animated(api, chat_id, dotcmd.dnd_enabled_text(), icon="🌙")
 
 
 async def cmd_ungmute(api, message: dict, _args: str) -> None:
     from bot import dotcmd, editable
 
     chat_id = message["chat"]["id"]
-    if not await state.dnd_active():
+    if not state.dnd_active():
         await api.send_message(chat_id, "Режим «не беспокоить» и так выключен.")
         return
     since = state.dnd_since
     await state.clear_dnd()
-    await editable.animated(
-        api, chat_id,
-        "☀️ **Режим «не беспокоить» выключен.** Сообщения снова доходят.",
-        icon="☀️")
+    await editable.animated(api, chat_id, dotcmd.dnd_disabled_text(since), icon="☀️")
     await dotcmd.dnd_digest(since)
 
 
@@ -348,7 +343,18 @@ HANDLERS = {
     "help": cmd_help,
     "status": cmd_status,
     "stats": cmd_status,
+    "gmute": cmd_gmute,
+    "dnd": cmd_gmute,
+    "ungmute": cmd_ungmute,
+    "undnd": cmd_ungmute,
+    "allow": cmd_allow,
+    "deny": cmd_deny,
+    "allowed": cmd_allowed,
+    "intercepted": cmd_intercepted,
+    "muted": cmd_intercepted,
     "deleted": cmd_deleted,
+    "find": cmd_find,
+    "export": cmd_export,
     "mutes": cmd_mutes,
     "unmute": cmd_unmute,
     "backup": cmd_backup,

@@ -101,7 +101,7 @@ def test_failed_lookup_is_not_hammered():
 def test_unknown_owner_never_deletes_anything():
     """Без владельца нельзя отличить свои сообщения от чужих — удалять опасно."""
     state.api.connection = None
-    asyncio.run(state.set_dnd(0, "занят"))
+    asyncio.run(state.set_dnd())
     incoming(text="важное", message_id=1)
 
     assert state.api.deleted == [], "вслепую ничего не удаляем"

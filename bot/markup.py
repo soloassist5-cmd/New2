@@ -14,6 +14,9 @@ _CODE = re.compile(r"`([^`\n]+)`")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _ITALIC = re.compile(r"(?<!\w)_([^_\n]+)_(?!\w)")
+# Курсив намеренно не переносится через строку: незакрытый `_` в многострочном
+# тексте иначе съедал бы полдокумента. Для таких блоков есть цитата «> ».
+_QUOTE = re.compile(r"(?:^>[ \t]?[^\n]*(?:\n|$))+", re.MULTILINE)
 _STRIKE = re.compile(r"~~([^~]+)~~")
 
 _SLOT = "\x00{}\x00"
@@ -30,6 +33,15 @@ def to_html(text: str) -> str:
     def park(fragment: str) -> str:
         parked.append(fragment)
         return _SLOT.format(len(parked) - 1)
+
+    def quote(match: re.Match) -> str:
+        block = match.group(0)
+        inner = "\n".join(line.lstrip(">").lstrip(" \t")
+                           for line in block.rstrip("\n").split("\n"))
+        tail = "\n" if block.endswith("\n") else ""     # разделитель принадлежит тексту
+        return park(f"<blockquote>{to_html(inner)}</blockquote>") + tail
+
+    text = _QUOTE.sub(quote, text)
 
     # Код и ссылки прячем до экранирования: внутри них разметку искать не нужно.
     text = _FENCED.sub(lambda m: park(f"<pre>{html.escape(m.group(1))}</pre>"), text)

@@ -73,8 +73,11 @@ MUTE_ANIM: str = (os.getenv("MUTE_ANIM", "type") or "type").strip().lower()
 MUTE_LOG: bool = _bool("MUTE_LOG", False)
 
 # Режим «не беспокоить»: сообщения удаляются, отправитель получает ответ.
-DND_TEXT: str = (os.getenv("DND_TEXT", "") or
-                 "Я сейчас занят, не принимаю сообщения.").strip()
+DND_DEFAULT_TEXT = (
+    "🌙 Включён режим «Не беспокоить» — сообщения сейчас не доходят.\n"
+    "Напишите, пожалуйста, позже."
+)
+DND_TEXT: str = (os.getenv("DND_TEXT", "") or DND_DEFAULT_TEXT).strip()
 DND_REPLY_COOLDOWN: int = _int("DND_REPLY_COOLDOWN", 3600)
 
 # Массовое удаление (очистка переписки) — одним файлом вместо сотни карточек.

@@ -222,43 +222,41 @@ async def mute_list_text() -> str:
 
 # ------------------------------------------------------- не беспокоить -----
 
-@bizcmd("gmute", args="[срок] [текст ответа]", aliases=["dnd"],
+@bizcmd("gmute", args="", aliases=["dnd"],
         desc="режим «не беспокоить»: удалять сообщения всех подряд")
 async def cmd_gmute(ctx: BizCtx) -> None:
     if not ctx.can("can_delete_all_messages"):
         await ctx.fail("У бота нет права удалять сообщения собеседника — "
                        "режим «не беспокоить» работать не будет.")
         return
-    seconds = fmt.parse_duration(ctx.args[0]) if ctx.args else None
-    rest = ctx.args[1:] if seconds is not None else ctx.args
-    await enable_dnd(seconds or 0, " ".join(rest))
-    await ctx.private(dnd_enabled_text(seconds or 0))
+    await state.set_dnd()
+    await ctx.private(dnd_enabled_text())
 
 
 @bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
 async def cmd_ungmute(ctx: BizCtx) -> None:
-    if not await state.dnd_active():
+    if not state.dnd_active():
         await ctx.fail("Режим «не беспокоить» и так выключен.")
         return
     since = state.dnd_since
     await state.clear_dnd()
-    await ctx.private("☀️ **Режим «не беспокоить» выключен.** "
-                      "Сообщения снова доходят.")
+    await ctx.private(dnd_disabled_text(since))
     await dnd_digest(since)
 
 
-async def enable_dnd(seconds: int, text: str) -> None:
-    until = int(time.time()) + seconds if seconds else 0
-    await state.set_dnd(until, text.strip() or config.DND_TEXT)
+def dnd_enabled_text() -> str:
+    quoted = "\n".join(f"> {line}" for line in config.DND_TEXT.splitlines())
+    return (f"🌙 **Режим «не беспокоить» включён.**\n\n"
+            f"Сообщения от всех будут удаляться сразу, а отправитель получит "
+            f"от вашего имени:\n\n{quoted}\n\n"
+            f"Исключения — белый список (`{config.PREFIX}allow` реплаем или "
+            f"/allow <id>).\n"
+            f"Выключить: `{config.PREFIX}ungmute` или /ungmute.")
 
 
-def dnd_enabled_text(seconds: int) -> str:
-    period = f"на {fmt.human_delta(seconds)}" if seconds else "бессрочно"
-    return (f"🌙 **Режим «не беспокоить» включён** {period}.\n\n"
-            f"Сообщения от всех будут удаляться, отправитель получит от вашего "
-            f"имени:\n_{state.dnd_text or config.DND_TEXT}_\n\n"
-            f"Исключения — белый список (`{config.PREFIX}allowed`). "
-            f"Выключить: `{config.PREFIX}ungmute`.")
+def dnd_disabled_text(since: int) -> str:
+    spent = f" Провели в нём {fmt.uptime(time.time() - since)}." if since else ""
+    return f"☀️ **Режим «не беспокоить» выключен.** Сообщения снова доходят.{spent}"
 
 
 async def dnd_digest(since: int) -> None:

@@ -62,3 +62,22 @@ def test_trim_does_not_split_entities():
 def test_trim_nested_tags():
     out = markup.trim("<b><i>длинный текст внутри</i></b>", 20)
     assert out.endswith("</i></b>")
+
+
+def test_quote_block_becomes_blockquote():
+    assert markup.to_html("> первая\n> вторая") == \
+        "<blockquote>первая\nвторая</blockquote>"
+
+
+def test_quote_keeps_inner_markup():
+    assert markup.to_html("> **важно**") == "<blockquote><b>важно</b></blockquote>"
+
+
+def test_quote_does_not_swallow_the_rest():
+    out = markup.to_html("> цитата\n\nобычный текст")
+    assert out == "<blockquote>цитата</blockquote>\n\nобычный текст"
+
+
+def test_italic_does_not_span_lines():
+    """Незакрытый `_` в многострочном тексте иначе съедал бы полдокумента."""
+    assert markup.to_html("_первая\nвторая_") == "_первая\nвторая_"

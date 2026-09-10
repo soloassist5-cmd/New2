@@ -52,49 +52,39 @@ def clear_afk() -> None:
 
 
 # ------------------------------------------- «не беспокоить» (gmute) -------
-# None — выключен, 0 — бессрочно, иначе метка времени окончания.
-dnd_until: int | None = None
-dnd_text: str = ""
+# Режим включается и выключается только вручную: срок здесь скорее вредит —
+# забыть выключить проще, чем не заметить, что он ещё включён.
+dnd_on: bool = False
 dnd_since: int = 0
 dnd_replied: dict[int, float] = {}      # кому уже ответили, чтобы не долбить
 
-KV_DND_UNTIL, KV_DND_TEXT, KV_DND_SINCE = "dnd_until", "dnd_text", "dnd_since"
+KV_DND_ON, KV_DND_SINCE = "dnd_on", "dnd_since"
 
 
 async def load_dnd() -> None:
-    raw = await db.kv_get(KV_DND_UNTIL, "")
-    global dnd_until, dnd_text, dnd_since
-    dnd_until = int(raw) if raw not in (None, "") else None
-    dnd_text = await db.kv_get(KV_DND_TEXT, "") or ""
+    global dnd_on, dnd_since
+    dnd_on = bool(await db.kv_get(KV_DND_ON, ""))
     dnd_since = int(await db.kv_get(KV_DND_SINCE, "0") or 0)
     dnd_replied.clear()
 
 
-async def set_dnd(until: int, text: str) -> None:
-    global dnd_until, dnd_text, dnd_since
-    dnd_until, dnd_text, dnd_since = until, text, int(time.time())
+async def set_dnd() -> None:
+    global dnd_on, dnd_since
+    dnd_on, dnd_since = True, int(time.time())
     dnd_replied.clear()
-    await db.kv_set(KV_DND_UNTIL, until)
-    await db.kv_set(KV_DND_TEXT, text)
+    await db.kv_set(KV_DND_ON, "1")
     await db.kv_set(KV_DND_SINCE, dnd_since)
 
 
 async def clear_dnd() -> None:
-    global dnd_until, dnd_text
-    dnd_until, dnd_text = None, ""
+    global dnd_on
+    dnd_on = False
     dnd_replied.clear()
-    await db.kv_set(KV_DND_UNTIL, "")
-    await db.kv_set(KV_DND_TEXT, "")
+    await db.kv_set(KV_DND_ON, "")
 
 
-async def dnd_active() -> bool:
-    """Проверяет режим и снимает его, когда срок вышел."""
-    if dnd_until is None:
-        return False
-    if dnd_until and dnd_until <= int(time.time()):
-        await clear_dnd()
-        return False
-    return True
+def dnd_active() -> bool:
+    return dnd_on
 
 
 # ------------------------------------------------------- белый список ------
