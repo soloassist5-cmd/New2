@@ -7,7 +7,7 @@ import config
 import db
 from bot import business, transcript
 from core import state
-from tests.fakes import ALL_RIGHTS, FakeBotAPI, business_message
+from tests.fakes import ALL_RIGHTS, FakeBotAPI, approve, business_message
 
 OWNER = 111
 OWNER_CHAT = 111
@@ -17,7 +17,7 @@ BIZ = "biz1"
 
 @pytest.fixture(autouse=True)
 def env():
-    from modules.antidelete import invalidate_all
+    from core.chatprefs import invalidate_all
 
     config.DB_PATH.unlink(missing_ok=True)
     asyncio.run(db.init())
@@ -29,15 +29,17 @@ def env():
     state.business.clear()
     state.mutes.clear()
     state.forget_own_deletions()
-    asyncio.run(state.load_dnd())        # состояние режимов живёт
-    asyncio.run(state.load_allowlist())  # в модуле, а не только в БД
+    state.users.clear()
+    state.allowlist.clear()
+    config.OWNER_ID = OWNER      # владелец бота — он же администратор
+    approve(OWNER, OWNER_CHAT)
     state.client = None
     state.log_entity = None
-    state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
     state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER_CHAT,
                            "is_enabled": True, "rights": dict(ALL_RIGHTS)}
     state.api = FakeBotAPI()
     yield
+    config.OWNER_ID = 0
     asyncio.run(db.close())
     state.api = None
     business._pending.clear()
@@ -103,8 +105,8 @@ def test_summary_counts_everything():
 def test_messages_move_to_the_journal():
     talk(12)
     purge(range(1, 13))
-    assert len(asyncio.run(db.last_deleted(PEER, 100))) == 12
-    assert asyncio.run(db.get_message(PEER, 1)) is None, "кэш вычищен"
+    assert len(asyncio.run(db.last_deleted(OWNER, PEER, 100))) == 12
+    assert asyncio.run(db.get_message(OWNER, PEER, 1)) is None, "кэш вычищен"
 
 
 # ------------------------------------------------------------ содержимое ----
@@ -202,7 +204,7 @@ def test_own_deletions_are_not_counted():
     talk(12)
     state.api.sent.clear()
     for msg_id in range(1, 13):
-        state.mark_own_deletion(PEER, msg_id, private=True)
+        state.mark_own_deletion(OWNER, PEER, msg_id)
     purge(range(1, 13))
     assert state.api.sent == [] and state.api.files == []
 

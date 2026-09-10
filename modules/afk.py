@@ -42,7 +42,7 @@ async def _autoreply(event) -> None:
     last = state.afk_replied.get(event.sender_id, 0)
     if time.time() - last < REPLY_COOLDOWN:
         return
-    if await state.is_muted(event.chat_id, event.sender_id):
+    if await state.is_muted(state.userbot_owner(), event.chat_id, event.sender_id):
         return
     state.afk_replied[event.sender_id] = time.time()
     away = fmt.uptime(time.time() - state.afk_since)

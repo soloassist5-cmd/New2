@@ -22,7 +22,8 @@ async def _delete(ctx: Ctx, ids: list[int]) -> int:
         batch = ids[start:start + CHUNK]
         try:
             await ctx.client.delete_messages(chat, batch, revoke=True)
-            state.mark_own_deletion(ctx.chat_id, *batch, private=ctx.is_private)
+            state.mark_own_deletion(state.userbot_owner(), ctx.chat_id, *batch,
+                                    private=ctx.is_private)
             removed += len(batch)
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось удалить пачку: %r", e)
@@ -86,6 +87,7 @@ async def cmd_sd(ctx: Ctx) -> None:
     await asyncio.sleep(seconds)
     try:
         await msg.delete()
-        state.mark_own_deletion(ctx.chat_id, msg.id, private=ctx.is_private)
+        state.mark_own_deletion(state.userbot_owner(), ctx.chat_id, msg.id,
+                                private=ctx.is_private)
     except Exception:
         pass

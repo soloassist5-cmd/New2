@@ -6,8 +6,8 @@ import pytest
 import config
 import db
 from bot import dotcmd
-from core import state
-from tests.fakes import ALL_RIGHTS, FakeBotAPI, business_message
+from core import chatprefs, state
+from tests.fakes import ALL_RIGHTS, FakeBotAPI, approve, business_message
 
 OWNER = 111
 OWNER_CHAT = 111
@@ -18,22 +18,22 @@ MUTED_FOREVER = "🔇 **Вы были замучены на неопределё
 
 @pytest.fixture(autouse=True)
 def env():
-    from modules.antidelete import invalidate_all
-
     config.DB_PATH.unlink(missing_ok=True)
     asyncio.run(db.init())
-    invalidate_all()
+    chatprefs.invalidate_all()
     config.ANIM_DELAY = 0
     state.mutes.clear()
     state.forget_own_deletions()
-    asyncio.run(state.load_dnd())        # состояние режимов живёт
-    asyncio.run(state.load_allowlist())  # в модуле, а не только в БД
-    state.owner_id, state.owner_chat_id = OWNER, OWNER_CHAT
+    state.users.clear()
+    state.allowlist.clear()
+    config.OWNER_ID = OWNER      # владелец бота — он же администратор
+    approve(OWNER, OWNER_CHAT)
     state.business.clear()
     state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER_CHAT,
                            "is_enabled": True, "rights": dict(ALL_RIGHTS)}
     state.api = FakeBotAPI()
     yield
+    config.OWNER_ID = 0
     asyncio.run(db.close())
     state.api = None
     state.business.clear()
@@ -42,7 +42,7 @@ def env():
 def run(text, *, api=None, **kwargs):
     api = api or state.api
     message = business_message(text, from_id=OWNER, **kwargs)
-    asyncio.run(dotcmd.handle(api, message, BIZ))
+    asyncio.run(dotcmd.handle(api, message, BIZ, OWNER))
     return api
 
 
@@ -56,7 +56,7 @@ def test_mute_replaces_command_with_an_animated_notice():
     assert posted and posted[0][0] == PEER, "уведомление ушло в саму переписку"
     assert posted[0][1].startswith("🔇 ▱"), "первый кадр — пустая полоса"
     assert api.edits[-1][2] == MUTED_FOREVER
-    assert (PEER, PEER) in state.mutes
+    assert (OWNER, PEER, PEER) in state.mutes
 
 
 def test_intermediate_frames_have_no_markdown():
@@ -69,7 +69,7 @@ def test_mute_with_duration_and_reason():
     api = run(".mute 2h капслок", message_id=11)
     final = api.edits[-1][2]
     assert "на 2 часа" in final and "Причина: капслок" in final
-    assert state.mutes[(PEER, PEER)] > 0
+    assert state.mutes[(OWNER, PEER, PEER)] > 0
 
 
 def test_quiet_flag_skips_animation():
@@ -79,7 +79,7 @@ def test_quiet_flag_skips_animation():
 
 def test_mute_all_flag_covers_every_chat():
     run(".mute -all", message_id=13)
-    assert (0, PEER) in state.mutes
+    assert (OWNER, 0, PEER) in state.mutes
     assert "во всех чатах" in state.api.edits[-1][2]
 
 
@@ -100,7 +100,7 @@ def test_unmute_announces_in_the_chat():
     run(".mute", message_id=16)
     api = run(".unmute", message_id=17)
     assert api.edits[-1][2] == "🔊 **С вас снят мут. Можете писать.**"
-    assert not asyncio.run(state.is_muted(PEER, PEER))
+    assert not asyncio.run(state.is_muted(OWNER, PEER, PEER))
 
 
 def test_unmute_without_mute_reports_privately():
@@ -112,7 +112,7 @@ def test_mute_survives_restart():
     run(".mute 1d", message_id=19)
     state.mutes.clear()
     asyncio.run(state.load_mutes())
-    assert asyncio.run(state.is_muted(PEER, PEER))
+    assert asyncio.run(state.is_muted(OWNER, PEER, PEER))
 
 
 # --------------------------------------------------------------- чистка ----
@@ -121,7 +121,7 @@ def test_del_removes_both_messages():
     reply = {"message_id": 30, "from": {"id": PEER, "first_name": "Он"}}
     api = run(".del", message_id=31, reply_to=reply)
     assert api.all_deleted_ids == [30, 31]
-    assert state.was_own_deletion(PEER, 30)
+    assert state.was_own_deletion(OWNER, PEER, 30)
 
 
 def test_del_without_reply_explains():
@@ -160,8 +160,7 @@ def test_id_reports_chat_and_sender():
 
 def test_antidelete_toggle_is_saved():
     run(".antidelete off", message_id=70)
-    from modules.antidelete import flags
-    assert (asyncio.run(flags(PEER, True)))["antidelete"] is False
+    assert (asyncio.run(chatprefs.flags(OWNER, PEER, True)))["antidelete"] is False
 
 
 def test_help_marks_visible_and_private_commands():

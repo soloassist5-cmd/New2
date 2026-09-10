@@ -36,7 +36,7 @@ async def make_backup() -> Path | None:
 
 
 async def upload() -> bool:
-    if state.log_entity is None and state.api is None:
+    if state.log_entity is None and (state.api is None or not config.OWNER_ID):
         return False
     tmp = await make_backup()
     if tmp is None:
@@ -56,7 +56,7 @@ async def upload() -> bool:
         # в личке при старте (getChat), поэтому именно оттуда база и поднимается
         # после передеплоя на хостинге с временным диском.
         sent = await state.api.send_file(
-            state.owner_chat_id, tmp.read_bytes(), BACKUP_NAME,
+            state.chat_of(config.OWNER_ID), tmp.read_bytes(), BACKUP_NAME,
             caption=caption + "\n\n_Это сообщение закреплено: из него база "
                     "восстановится сама после передеплоя._")
         await _repin(sent)
@@ -77,15 +77,16 @@ async def _repin(sent: dict | None) -> None:
     if not sent or not sent.get("message_id"):
         return
     previous = await db.kv_get(KV_PINNED, "")
+    admin_chat = state.chat_of(config.OWNER_ID)
     try:
-        await state.api.pin_message(state.owner_chat_id, sent["message_id"])
+        await state.api.pin_message(admin_chat, sent["message_id"])
         await db.kv_set(KV_PINNED, sent["message_id"])
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось закрепить бэкап: %r", e)
         return
     if previous:
         try:
-            await state.api.unpin_message(state.owner_chat_id, int(previous))
+            await state.api.unpin_message(admin_chat, int(previous))
         except Exception as e:                               # noqa: BLE001
             log.debug("старое закрепление не снялось: %r", e)
 

@@ -21,15 +21,22 @@ class FakeBotAPI:
         self.unpinned: list[int] = []
         self.connection_lookups = 0
         self.captions: list[str | None] = []
+        self.markups: list[dict | None] = []
+        self.callbacks: list[tuple[str, str]] = []
         self._ids = itertools.count(1000)
 
     async def send_message(self, chat_id, text, *, business_connection_id=None,
-                           reply_to=None):
+                           reply_to=None, reply_markup=None):
         self.sent.append((chat_id, text, business_connection_id))
+        self.markups.append(reply_markup)
         return {"message_id": next(self._ids)}
 
+    async def answer_callback(self, callback_query_id, text="", show_alert=False):
+        self.callbacks.append((callback_query_id, text))
+        return True
+
     async def edit_message_text(self, chat_id, message_id, text, *,
-                                business_connection_id=None):
+                                business_connection_id=None, reply_markup=None):
         self.edits.append((chat_id, message_id, text))
         return {"message_id": message_id}
 
@@ -123,3 +130,13 @@ def business_message(text="", *, message_id=10, chat_id=777, from_id=777,
         message["photo"] = [{"file_id": photo, "width": 90},
                             {"file_id": photo, "width": 1280}]
     return message
+
+
+def approve(user_id: int, chat_id: int | None = None, *, name: str = "Владелец",
+            status: str = "approved") -> None:
+    """Кладёт пользователя в кэш state.users, минуя базу."""
+    from core import state
+
+    state.users[user_id] = {"name": name, "status": status,
+                            "chat_id": chat_id if chat_id is not None else user_id,
+                            "dnd_since": 0}

@@ -4,7 +4,9 @@ import asyncio
 import pytest
 
 from core import reporter, state
+from tests.fakes import approve
 
+OWNER = 555
 OWNER_CHAT = 555
 CARD = "🗑 **Удалённое сообщение**\nтекст"
 
@@ -42,13 +44,16 @@ class FakeAPI:
 @pytest.fixture(autouse=True)
 def env():
     state.client = FakeUserbot()
+    # Запасной путь в LOG_CHAT есть только у владельца юзербота.
+    state.me = type("U", (), {"id": OWNER})()
     state.log_entity = "log"
     state.api = None
-    state.owner_chat_id = OWNER_CHAT
+    state.users.clear()
+    approve(OWNER, OWNER_CHAT)
     state.bot_blocked = False
     yield
-    state.client = state.api = state.log_entity = None
-    state.owner_chat_id = 0
+    state.client = state.api = state.log_entity = state.me = None
+    state.users.clear()
 
 
 def use_api(**kwargs):
@@ -57,20 +62,20 @@ def use_api(**kwargs):
 
 
 def test_without_bot_report_goes_to_log_chat():
-    assert asyncio.run(reporter.send_report(CARD)) is True
+    assert asyncio.run(reporter.send_report(OWNER, CARD)) is True
     assert state.client.sent[0][:2] == ("log", CARD)
 
 
 def test_with_bot_report_goes_to_owner_only():
     api = use_api()
-    assert asyncio.run(reporter.send_report(CARD)) is True
+    assert asyncio.run(reporter.send_report(OWNER, CARD)) is True
     assert api.messages == [CARD]
     assert state.client.sent == [], "дублировать в лог-чат не нужно"
 
 
 def test_media_is_attached_by_file_id():
     api = use_api()
-    asyncio.run(reporter.send_report(CARD, file_id="AgAC123", media_type="фото"))
+    asyncio.run(reporter.send_report(OWNER, CARD, file_id="AgAC123", media_type="фото"))
     assert api.media == [("AgAC123", "фото", CARD)]
     assert api.messages == []
 
@@ -78,34 +83,44 @@ def test_media_is_attached_by_file_id():
 def test_stale_file_id_still_delivers_text():
     """file_id мог протухнуть — текст отчёта важнее вложения."""
     api = use_api(fail_media=True)
-    assert asyncio.run(reporter.send_report(CARD, file_id="dead")) is True
+    assert asyncio.run(reporter.send_report(OWNER, CARD, file_id="dead")) is True
     assert api.messages == [CARD]
 
 
 def test_blocked_bot_falls_back_and_warns_once():
     use_api(fail_text=True)
-    assert asyncio.run(reporter.send_report(CARD)) is True
+    assert asyncio.run(reporter.send_report(OWNER, CARD)) is True
     texts = [text for _, text, _ in state.client.sent]
     assert reporter.NO_START_HINT in texts, "подсказываем нажать Start"
     assert CARD in texts, "сам отчёт теряться не должен"
 
-    asyncio.run(reporter.send_report("второй"))
+    asyncio.run(reporter.send_report(OWNER, "второй"))
     texts = [text for _, text, _ in state.client.sent]
     assert texts.count(reporter.NO_START_HINT) == 1, "подсказка не повторяется"
 
 
 def test_recovered_bot_clears_the_flag():
     api = use_api(fail_text=True)
-    asyncio.run(reporter.send_report(CARD))
+    asyncio.run(reporter.send_report(OWNER, CARD))
     assert state.bot_blocked is True
     api.fail_text = False
-    asyncio.run(reporter.send_report("снова"))
+    asyncio.run(reporter.send_report(OWNER, "снова"))
     assert state.bot_blocked is False
 
 
 def test_business_only_mode_without_userbot():
     """Без юзербота запасного пути нет — доставка просто не удалась."""
     state.client = None
+    state.me = None
     state.log_entity = None
     use_api(fail_text=True)
-    assert asyncio.run(reporter.send_report(CARD)) is False
+    assert asyncio.run(reporter.send_report(OWNER, CARD)) is False
+
+
+def test_other_owners_never_fall_back_to_the_userbot_log():
+    """LOG_CHAT принадлежит владельцу юзербота — чужие отчёты туда не уходят."""
+    use_api(fail_text=True)
+    stranger = 999
+    approve(stranger, stranger)
+    assert asyncio.run(reporter.send_report(stranger, CARD)) is False
+    assert state.client.sent == []

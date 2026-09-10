@@ -17,17 +17,18 @@ def _line(row) -> str:
             f"  {preview or '_пусто_'}")
 
 
-async def deliver(rows, *, title: str, empty: str, owner_id: int | None = None,
+async def deliver(owner_id: int, rows, *, title: str, empty: str,
                   chat_title: str = "перехваченное") -> bool:
     """Отдаёт владельцу список или файл. False — отдавать было нечего."""
     if not rows:
-        await reporter.send_report(empty)
+        if empty:
+            await reporter.send_report(owner_id, empty)
         return False
 
     ordered = sorted(rows, key=lambda row: (row["date"] or 0, row["id"]))
     if len(ordered) <= LIST_LIMIT:
         body = "\n".join(_line(row) for row in reversed(ordered))
-        await reporter.send_report(f"{title}\n\n{fmt.truncate(body, 3500)}")
+        await reporter.send_report(owner_id, f"{title}\n\n{fmt.truncate(body, 3500)}")
         return True
 
     when = db.now()
@@ -35,7 +36,7 @@ async def deliver(rows, *, title: str, empty: str, owner_id: int | None = None,
         ordered, chat_title=chat_title, owner_id=owner_id,
         requested=len(ordered), when=when, reason="Перехваченные сообщения")
     await reporter.send_document(
-        payload, f"intercepted_{when}.txt",
+        owner_id, payload, f"intercepted_{when}.txt",
         f"{title}\n\nсообщений: **{stats['recovered']}**"
         + (f" · вложений: **{stats['media']}**" if stats["media"] else ""))
     return True

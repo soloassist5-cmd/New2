@@ -63,20 +63,25 @@ async def cmd_info(ctx: Ctx) -> None:
         lines.append("👥 участников: "
                      f"{getattr(entity, 'participants_count', None) or 'неизвестно'}")
 
-    muted_here = (ctx.chat_id, user_id) in state.mutes
-    muted_global = (0, user_id) in state.mutes
+    owner = state.userbot_owner()
+    muted_here = (owner, ctx.chat_id, user_id) in state.mutes
+    muted_global = (owner, 0, user_id) in state.mutes
     if muted_here or muted_global:
         lines.append("🔇 замучен: " + ("везде" if muted_global else "в этом чате"))
 
-    cached = await db.scalar("SELECT COUNT(*) FROM messages WHERE user_id=?", (user_id,))
-    deleted = await db.scalar("SELECT COUNT(*) FROM deleted WHERE user_id=?", (user_id,))
+    cached = await db.scalar(
+        "SELECT COUNT(*) FROM messages WHERE owner_id=? AND user_id=?",
+        (owner, user_id))
+    deleted = await db.scalar(
+        "SELECT COUNT(*) FROM deleted WHERE owner_id=? AND user_id=?",
+        (owner, user_id))
     lines.append(f"🗂 в кэше: {cached} · удалено: {deleted}")
     await ctx.done("\n".join(lines))
 
 
 @command("stats", args="", cat=CAT, desc="статистика базы и бота")
 async def cmd_stats(ctx: Ctx) -> None:
-    s = await db.stats()
+    s = await db.stats(state.userbot_owner())
     await ctx.done(
         "📊 **Статистика**\n"
         f"🗂 в кэше: **{s['cached']}**\n"

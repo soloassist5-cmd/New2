@@ -9,43 +9,27 @@ from telethon import events
 
 import config
 import db
-from core import fmt, mediastore, reporter, state
+from core import chatprefs, fmt, mediastore, reporter, state
 from core.dispatcher import Ctx, command
 
 log = logging.getLogger("antidelete")
 
 CAT = "Антиудаление"
 
-_settings: dict[int, dict] = {}
 _names: dict[int, str] = {}
 
 
 def invalidate(chat_id: int) -> None:
-    _settings.pop(chat_id, None)
+    chatprefs.invalidate(state.userbot_owner(), chat_id)
 
 
 def invalidate_all() -> None:
-    """Сбрасывает кэш настроек — например, после восстановления базы."""
-    _settings.clear()
+    chatprefs.invalidate_all()
     _names.clear()
 
 
 async def flags(chat_id: int, is_private: bool) -> dict:
-    cached = _settings.get(chat_id)
-    if cached is not None:
-        return cached
-    row = await db.get_settings(chat_id)
-    default_on = config.DEFAULT_ANTIDELETE and (is_private or config.ANTIDELETE_GROUPS)
-    resolved = {
-        "antidelete": bool(row["antidelete"]) if row["antidelete"] is not None else default_on,
-        "log_edits": bool(row["log_edits"]) if row["log_edits"] is not None
-        else (config.DEFAULT_LOG_EDITS and default_on),
-        "save_media": bool(row["save_media"]) if row["save_media"] is not None
-        else config.DEFAULT_SAVE_MEDIA,
-        "ignored": bool(row["ignored"]),
-    }
-    _settings[chat_id] = resolved
-    return resolved
+    return await chatprefs.flags(state.userbot_owner(), chat_id, is_private)
 
 
 async def _name(entity_id: int | None) -> str:
@@ -67,7 +51,7 @@ async def _snapshot_later(chat_id: int, msg_id: int, message) -> None:
     ref = await mediastore.snapshot(message)
     if ref:
         try:
-            await db.set_media_ref(chat_id, msg_id, ref)
+            await db.set_media_ref(state.userbot_owner(), chat_id, msg_id, ref)
         except Exception as e:                               # noqa: BLE001
             log.debug("не записал media_ref: %r", e)
 
@@ -88,6 +72,7 @@ async def _cache(event) -> None:
     kind = mediastore.media_kind(message)
     try:
         await db.cache_message(
+            owner_id=state.userbot_owner(),
             chat_id=chat_id,
             msg_id=message.id,
             user_id=event.sender_id,
@@ -128,14 +113,16 @@ async def _card(row) -> str:
 
 
 async def _on_delete(event) -> None:
+    owner = state.userbot_owner()
     chat_id = event.chat_id
     for msg_id in event.deleted_ids:
-        if state.was_own_deletion(chat_id, msg_id):
+        if state.was_own_deletion(owner, chat_id, msg_id):
             continue
         try:
-            row = (await db.get_message(chat_id, msg_id)) if chat_id is not None else None
+            row = (await db.get_message(owner, chat_id, msg_id)
+                   if chat_id is not None else None)
             if row is None:
-                row = await db.find_private_message(msg_id)
+                row = await db.find_private_message(owner, msg_id)
             if row is None:
                 continue
             if state.me is not None and row["user_id"] == state.me.id and not config.LOG_OWN:
@@ -143,9 +130,10 @@ async def _on_delete(event) -> None:
             conf = await flags(row["chat_id"], bool(row["is_private"]))
             if not conf["antidelete"] or conf["ignored"]:
                 continue
-            await db.add_deleted(dict(row))
-            await reporter.send_report(await _card(row), media_ref=row["media_ref"])
-            await db.drop_message(row["chat_id"], row["msg_id"])
+            await db.add_deleted(dict(row) | {"owner_id": owner})
+            await reporter.send_report(owner, await _card(row),
+                                       media_ref=row["media_ref"])
+            await db.drop_message(owner, row["chat_id"], row["msg_id"])
         except Exception as e:                               # noqa: BLE001
             log.warning("обработка удаления %s: %r", msg_id, e)
 
@@ -156,7 +144,8 @@ async def _on_edit(event) -> None:
     conf = await flags(chat_id, bool(event.is_private))
     if conf["ignored"] or not conf["log_edits"]:
         return
-    row = await db.get_message(chat_id, message.id)
+    owner = state.userbot_owner()
+    row = await db.get_message(owner, chat_id, message.id)
     new_text = message.message or ""
     if row is None:
         await _cache(event)
@@ -165,9 +154,10 @@ async def _on_edit(event) -> None:
     if old_text == new_text:
         return
 
-    await db.add_edit(chat_id, message.id, event.sender_id, old_text, new_text)
+    await db.add_edit(owner, chat_id, message.id, event.sender_id, old_text,
+                      new_text)
     await db.cache_message(
-        chat_id=chat_id, msg_id=message.id, user_id=row["user_id"],
+        owner_id=owner, chat_id=chat_id, msg_id=message.id, user_id=row["user_id"],
         is_private=bool(row["is_private"]), text=new_text,
         media_type=row["media_type"], media_ref=row["media_ref"],
         reply_to=row["reply_to"], date=row["date"],
@@ -177,6 +167,7 @@ async def _on_edit(event) -> None:
     who = await _name(event.sender_id)
     where = await _name(chat_id)
     await reporter.send_report(
+        owner,
         "✏️ **Сообщение изменено**\n"
         f"👤 {who} (`{event.sender_id}`)\n"
         f"💬 {where} (`{chat_id}`)\n\n"
@@ -196,8 +187,7 @@ def _on_off(args: list[str], current: bool) -> bool:
 async def _toggle(ctx: Ctx, key: str, label: str) -> None:
     conf = await flags(ctx.chat_id, ctx.is_private)
     value = _on_off(ctx.args, conf[key])
-    await db.set_setting(ctx.chat_id, key, int(value))
-    invalidate(ctx.chat_id)
+    await chatprefs.toggle(state.userbot_owner(), ctx.chat_id, key, value)
     await ctx.done(f"{'✅' if value else '🚫'} {label}: **{'включено' if value else 'выключено'}** "
                    f"для этого чата.", delete_after=8)
 
@@ -233,7 +223,7 @@ async def cmd_deleted(ctx: Ctx) -> None:
     if ctx.args and ctx.args[0].isdigit():
         limit = max(1, min(int(ctx.args[0]), 30))
     scope = None if "all" in ctx.flags else ctx.chat_id
-    rows = await db.last_deleted(scope, limit)
+    rows = await db.last_deleted(state.userbot_owner(), scope, limit)
     if not rows:
         await ctx.done("🗑 Удалённых сообщений не найдено.")
         return
@@ -250,7 +240,7 @@ async def cmd_deleted(ctx: Ctx) -> None:
          desc="вернуть в чат N-е с конца удалённое сообщение (по умолчанию последнее)")
 async def cmd_restore(ctx: Ctx) -> None:
     index = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 1
-    rows = await db.last_deleted(ctx.chat_id, max(index, 1))
+    rows = await db.last_deleted(state.userbot_owner(), ctx.chat_id, max(index, 1))
     if len(rows) < index:
         await ctx.fail("Столько удалённых сообщений не сохранено.")
         return
@@ -276,7 +266,7 @@ async def cmd_restore(ctx: Ctx) -> None:
 async def cmd_export(ctx: Ctx) -> None:
     from bot import transcript
 
-    rows = await db.last_deleted(ctx.chat_id, 5000)
+    rows = await db.last_deleted(state.userbot_owner(), ctx.chat_id, 5000)
     if not rows:
         await ctx.fail("Нечего выгружать.")
         return

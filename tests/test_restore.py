@@ -6,7 +6,7 @@ import pytest
 import config
 import db
 from core import backup, state
-from tests.fakes import FakeBotAPI
+from tests.fakes import FakeBotAPI, approve
 
 OWNER = 111
 
@@ -16,11 +16,15 @@ def env():
     config.DB_PATH.unlink(missing_ok=True)
     config.DB_PATH.with_suffix(".incoming").unlink(missing_ok=True)
     state.api = FakeBotAPI()
-    state.owner_chat_id = OWNER
+    config.OWNER_ID = OWNER
+    state.users.clear()
+    approve(OWNER, OWNER)
     state.client = None
     state.log_entity = None
     yield
     state.api = None
+    config.OWNER_ID = 0
+    state.users.clear()
     config.DB_PATH.unlink(missing_ok=True)
 
 
@@ -28,7 +32,7 @@ def snapshot_bytes() -> bytes:
     """Готовая база с одним мутом внутри."""
     async def build():
         await db.init()
-        await state.mute_user(5, 7, 0)
+        await state.mute_user(OWNER, 5, 7, 0)
         path = await backup.make_backup()
         payload = path.read_bytes()
         path.unlink()
@@ -59,7 +63,7 @@ def test_database_returns_from_the_pinned_backup():
     async def check():
         await db.init()
         await state.load_mutes()
-        assert await state.is_muted(5, 7)
+        assert await state.is_muted(OWNER, 5, 7)
         await db.close()
 
     asyncio.run(check())

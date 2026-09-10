@@ -1,4 +1,9 @@
-"""Команды в личке с ботом. До подключения Business бот выдаёт инструкцию."""
+"""Команды в личке с ботом.
+
+Бот многопользовательский: каждый одобренный пользователь — владелец своих
+чатов и видит только свои данные. Администратор (OWNER_ID) решает, кого пускать,
+и распоряжается базой целиком.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,19 +12,24 @@ import time
 
 import config
 import db
-from bot import dotcmd, parse
-from core import backup, fmt, state
+from bot import access, digest, dotcmd, parse, transcript
+from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
 
+# Включение Business Mode — разовое действие того, кто создавал бота.
+# Обычному пользователю про @BotFather знать незачем.
+ADMIN_PREREQUISITE = (
+    "**Шаг 0 (только для вас, один раз).** В @BotFather: `/mybots` → {bot} → "
+    "**Bot Settings** → **Business Mode** → **Turn on**. Пока он выключен, "
+    "Telegram отвечает «этот бот пока не поддерживает режим секретаря».\n\n"
+)
+
 CONNECT_STEPS = (
     "🔌 **Как подключить бота к личным чатам**\n\n"
-    "Понадобится **Telegram Premium** — без подписки раздела Business в настройках нет.\n\n"
-    "**Шаг 1. Разрешить режим Business — в @BotFather**\n"
-    "`/mybots` → выберите {bot} → **Bot Settings** → **Business Mode** → **Turn on**\n"
-    "Тумблер по умолчанию выключен. Пока он выключен, Telegram отвечает "
-    "«этот бот пока не поддерживает режим секретаря».\n\n"
-    "**Шаг 2. Подключить бота к чатам**\n"
+    "{prerequisite}"
+    "Понадобится **Telegram Premium** — без подписки раздела Business в "
+    "настройках нет.\n\n"
     "1. Настройки → **Telegram для бизнеса**\n"
     "2. **Чат-боты**\n"
     "3. Вставьте {bot}\n"
@@ -30,9 +40,7 @@ CONNECT_STEPS = (
     "   • удалять сообщения — **и свои, и собеседника**\n\n"
     "Названия пунктов немного отличаются между версиями приложения — "
     "ориентируйтесь по смыслу.\n\n"
-    "Как только подключите, я пришлю сюда подтверждение и список выданных прав. "
-    "После этого заработают отчёты об удалённых сообщениях и команды `{p}` "
-    "прямо в переписке."
+    "Как только подключите, я пришлю сюда подтверждение и список выданных прав."
 )
 
 WELCOME = (
@@ -44,20 +52,20 @@ WELCOME = (
 NOT_CONNECTED = (
     "🔌 **Пока не вижу подключения к вашим личным чатам.**\n\n"
     "**Если ещё не подключали** — /connect, там пошаговая инструкция.\n\n"
-    "**Если подключали, а я забыл** — так бывает после обновления на хостинге "
-    "с временным диском. Ничего переподключать не нужно: напишите что-нибудь "
-    "в любом личном чате, и я перечитаю связку у Telegram сам."
+    "**Если подключали, а я забыл** — так бывает после обновления бота. "
+    "Ничего переподключать не нужно: напишите что-нибудь в любом личном чате, "
+    "и я перечитаю связку у Telegram сам."
 )
 
 ALREADY_LINKED_HINT = (
-    "\n\n_Уже подключали, а я не вижу? Так бывает после обновления на хостинге. "
-    "Напишите что-нибудь в любом личном чате — связку я подхвачу сам._"
+    "\n\n_Уже подключали, а я не вижу? Напишите что-нибудь в любом личном чате — "
+    "связку я подхвачу сам._"
 )
 
 OWNER_ID_HINT = (
-    "\n\n⚙️ _Чтобы при обновлениях не терялся и журнал удалённых: добавьте в "
-    "переменные окружения_ `OWNER_ID={user_id}` _— тогда я буду поднимать базу "
-    "из закреплённого здесь бэкапа сам._"
+    "\n\n⚙️ _Администратору: добавьте в переменные окружения_ "
+    "`OWNER_ID={user_id}` _— тогда бот будет поднимать базу из закреплённого "
+    "здесь бэкапа после обновлений._"
 )
 
 HELP = (
@@ -69,13 +77,19 @@ HELP = (
     "/deleted [N] — последние удалённые\n"
     "/find <текст> — поиск по всему сохранённому\n"
     "/mutes, /unmute <id> — муты\n"
-    "/export — весь журнал файлом\n"
+    "/export — ваш журнал файлом\n"
     "/status — состояние и права\n"
-    "/backup — прислать базу файлом\n"
     "/connect — инструкция по подключению\n\n"
     "**В самих переписках** (пишете вы, от своего имени):\n"
     "`{p}mute` · `{p}unmute` · `{p}gmute` · `{p}allow` · `{p}del` · `{p}purge` · "
     "`{p}deleted` · `{p}muted` · `{p}export` · `{p}help`"
+)
+
+ADMIN_HELP = (
+    "\n\n**Только для администратора:**\n"
+    "/users — кто пользуется ботом и заявки\n"
+    "/revoke <id> — закрыть доступ\n"
+    "/backup — база целиком файлом"
 )
 
 MENU = (
@@ -87,9 +101,8 @@ MENU = (
     ("allowed", "белый список"),
     ("mutes", "активные муты"),
     ("unmute", "снять мут: /unmute <id>"),
-    ("export", "весь журнал файлом"),
+    ("export", "ваш журнал файлом"),
     ("status", "состояние и права"),
-    ("backup", "прислать базу файлом"),
     ("connect", "как подключить к личным чатам"),
     ("help", "справка"),
 )
@@ -100,53 +113,57 @@ def bot_mention() -> str:
     return f"@{username}" if username else "юзернейм бота"
 
 
-def owner_known() -> bool:
-    return bool(state.owner_id)
+def connect_steps(user_id: int) -> str:
+    prerequisite = ADMIN_PREREQUISITE.format(bot=bot_mention()) \
+        if state.is_admin(user_id) else ""
+    return CONNECT_STEPS.format(bot=bot_mention(), prerequisite=prerequisite)
 
 
-def is_owner(user_id: int) -> bool:
-    return bool(state.owner_id) and user_id == state.owner_id
+def connected(user_id: int) -> bool:
+    return state.business_of(user_id) is not None
 
 
-def connected() -> bool:
-    return any(info.get("is_enabled") for info in state.business.values())
+def owner_id_hint(user_id: int) -> str:
+    """Без OWNER_ID база не переживает передеплой — подсказываем, где взять id."""
+    if config.OWNER_ID or state.users.get(user_id, {}).get("status") != db.APPROVED:
+        return ""
+    return OWNER_ID_HINT.format(user_id=user_id)
 
 
 # ----------------------------------------------------------------- команды --
 
-def owner_id_hint(user_id: int) -> str:
-    """Без OWNER_ID база не переживает передеплой — подсказываем, где взять id."""
-    return "" if config.OWNER_ID else OWNER_ID_HINT.format(user_id=user_id)
-
-
 async def cmd_start(api, message: dict, _args: str) -> None:
     chat_id = message["chat"]["id"]
-    user_id = (message.get("from") or {}).get("id")
-    if is_owner(user_id):
-        state.owner_chat_id = chat_id
+    user = message.get("from") or {}
+    user_id = user.get("id")
+    await state.remember_user(user_id, name=parse.display_name(user),
+                              chat_id=chat_id)
 
-    if connected() and is_owner(user_id):
-        await api.send_message(chat_id, WELCOME + HELP.format(p=config.PREFIX)
+    if connected(user_id):
+        await api.send_message(chat_id, WELCOME + help_text(user_id)
                                + owner_id_hint(user_id))
         return
-    await api.send_message(
-        chat_id,
-        WELCOME + CONNECT_STEPS.format(bot=bot_mention(), p=config.PREFIX)
-        + ALREADY_LINKED_HINT + owner_id_hint(user_id))
+    await api.send_message(chat_id, WELCOME + connect_steps(user_id)
+                           + ALREADY_LINKED_HINT + owner_id_hint(user_id))
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
-    await api.send_message(
-        message["chat"]["id"],
-        CONNECT_STEPS.format(bot=bot_mention(), p=config.PREFIX))
+    user_id = (message.get("from") or {}).get("id")
+    await api.send_message(message["chat"]["id"], connect_steps(user_id))
+
+
+def help_text(user_id: int) -> str:
+    text = HELP.format(p=config.PREFIX)
+    return text + ADMIN_HELP if state.is_admin(user_id) else text
 
 
 async def cmd_help(api, message: dict, _args: str) -> None:
     chat_id = message["chat"]["id"]
-    if not connected():
+    user_id = (message.get("from") or {}).get("id")
+    if not connected(user_id):
         await api.send_message(chat_id, NOT_CONNECTED)
         return
-    await api.send_message(chat_id, HELP.format(p=config.PREFIX) + "\n\n"
+    await api.send_message(chat_id, help_text(user_id) + "\n\n"
                            + dotcmd.help_text())
 
 
@@ -154,7 +171,8 @@ async def cmd_status(api, message: dict, _args: str) -> None:
     from bot.business import rights_report
 
     chat_id = message["chat"]["id"]
-    stats = await db.stats()
+    user_id = (message.get("from") or {}).get("id")
+    stats = await db.stats(user_id)
     lines = [
         "📊 **Состояние**",
         f"⏱ аптайм: {fmt.uptime(time.time() - state.start_time)}",
@@ -163,34 +181,36 @@ async def cmd_status(api, message: dict, _args: str) -> None:
         f"✏️ правок: {stats['edits']}",
         f"🔇 мутов: {stats['mutes']}",
         f"🔒 перехвачено: {stats['intercepted']}",
-        f"💾 база: {fmt.size(stats['size'])}",
         "",
     ]
-    if state.dnd_active():
-        spent = fmt.uptime(time.time() - state.dnd_since) if state.dnd_since else "—"
+    if state.dnd_active(user_id):
+        spent = fmt.uptime(time.time() - state.dnd_since(user_id))
         lines.append(f"🌙 **Не беспокоить: включён** (уже {spent})")
-        lines.append(f"_Ответ:_ {config.DND_TEXT}")
         lines.append(f"✅ в белом списке: {stats['allowed']}")
         lines.append("")
-    if connected():
+
+    connection_id = state.business_of(user_id)
+    if connection_id:
         lines.append("🔗 **Подключено к личным чатам**")
-        for info in state.business.values():
-            if info.get("is_enabled"):
-                lines.append(rights_report(info.get("rights") or {}))
-                break
+        lines.append(rights_report(state.rights_of(connection_id)))
     else:
         lines.append("🔌 **Не подключено.** Инструкция — /connect")
         lines.append("_Если подключение есть, напишите что-нибудь в личном чате — "
                      "я его перечитаю._")
-    if state.client is not None:
-        lines.append("\n👤 Юзербот-режим активен: работают и групповые чаты.")
+
+    if state.is_admin(user_id):
+        lines += ["", f"👥 пользователей: {stats['users']}",
+                  f"💾 база целиком: {fmt.size(stats['size'])}"]
+        if state.client is not None:
+            lines.append("👤 Юзербот-режим активен: работают и групповые чаты.")
     await api.send_message(chat_id, "\n".join(lines))
 
 
 async def cmd_deleted(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
+    user_id = (message.get("from") or {}).get("id")
     limit = int(args) if args.strip().isdigit() else 10
-    rows = await db.last_deleted(None, max(1, min(limit, 30)))
+    rows = await db.last_deleted(user_id, None, max(1, min(limit, 30)))
     if not rows:
         await api.send_message(chat_id, "🗑 Пока ничего не удаляли.")
         return
@@ -204,107 +224,99 @@ async def cmd_deleted(api, message: dict, args: str) -> None:
 
 
 async def cmd_mutes(api, message: dict, _args: str) -> None:
-    chat_id = message["chat"]["id"]
-    rows = await db.all_mutes()
-    now = int(time.time())
-    lines = ["🔇 **Активные муты**", ""]
-    for row in rows:
-        if row["until"] and row["until"] <= now:
-            continue
-        scope = "везде" if row["chat_id"] == 0 else f"чат `{row['chat_id']}`"
-        left = ("бессрочно" if not row["until"]
-                else f"ещё {fmt.human_delta(row['until'] - now)}")
-        lines.append(f"• `{row['user_id']}` — {scope}, {left}")
-    if len(lines) == 2:
-        await api.send_message(chat_id, "🔇 Список мутов пуст.")
-        return
-    lines.append("\n_Снять:_ `/unmute <id>`")
-    await api.send_message(chat_id, fmt.truncate("\n".join(lines), 3500))
+    user_id = (message.get("from") or {}).get("id")
+    await api.send_message(message["chat"]["id"],
+                           await dotcmd.mute_list_text(user_id))
 
 
 async def cmd_unmute(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
     raw = args.strip()
     if not re.fullmatch(r"-?\d+", raw):
         await api.send_message(chat_id, "Использование: `/unmute 123456789`")
         return
-    user_id = int(raw)
-    removed = [key for key in list(state.mutes) if key[1] == user_id]
-    for scope, _ in removed:
-        await state.unmute_user(scope, user_id)
+    target = int(raw)
+    removed = [key for key in list(state.mutes)
+               if key[0] == owner_id and key[2] == target]
+    for _, scope, _ in removed:
+        await state.unmute_user(owner_id, scope, target)
     await api.send_message(chat_id, f"🔊 Мутов снято: **{len(removed)}**." if removed
                            else "Этот пользователь не был замучен.")
 
 
 async def cmd_gmute(api, message: dict, _args: str) -> None:
-    from bot import dotcmd, editable
+    from bot import editable
 
     chat_id = message["chat"]["id"]
-    if state.dnd_active():
+    user_id = (message.get("from") or {}).get("id")
+    if state.dnd_active(user_id):
         await api.send_message(chat_id, dotcmd.dnd_enabled_text())
         return
-    await state.set_dnd()
+    await state.set_dnd(user_id)
     await editable.animated(api, chat_id, dotcmd.dnd_enabled_text(), icon="🌙")
 
 
 async def cmd_ungmute(api, message: dict, _args: str) -> None:
-    from bot import dotcmd, editable
+    from bot import editable
 
     chat_id = message["chat"]["id"]
-    if not state.dnd_active():
+    user_id = (message.get("from") or {}).get("id")
+    if not state.dnd_active(user_id):
         await api.send_message(chat_id, "Режим «не беспокоить» и так выключен.")
         return
-    since = state.dnd_since
-    await state.clear_dnd()
+    since = state.dnd_since(user_id)
+    await state.clear_dnd(user_id)
     await editable.animated(api, chat_id, dotcmd.dnd_disabled_text(since), icon="☀️")
-    await dotcmd.dnd_digest(since)
+    await dotcmd.dnd_digest(user_id, since)
 
 
 async def cmd_allow(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
     raw = args.strip()
     if not re.fullmatch(r"-?\d+", raw):
         await api.send_message(chat_id, "Использование: `/allow 123456789`\n"
                                         "id можно взять из `.id` в нужном чате.")
         return
-    await state.allow_user(int(raw), raw)
+    await state.allow_user(owner_id, int(raw), raw)
     await api.send_message(chat_id, f"✅ `{raw}` проходит сквозь «не беспокоить».")
 
 
 async def cmd_deny(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
     raw = args.strip()
     if not re.fullmatch(r"-?\d+", raw):
         await api.send_message(chat_id, "Использование: `/deny 123456789`")
         return
-    removed = await state.deny_user(int(raw))
+    removed = await state.deny_user(owner_id, int(raw))
     await api.send_message(chat_id, f"🚫 `{raw}` убран из белого списка." if removed
                            else "Его и не было в белом списке.")
 
 
 async def cmd_allowed(api, message: dict, _args: str) -> None:
-    from bot import dotcmd
-
-    await api.send_message(message["chat"]["id"], await dotcmd.allowed_text())
+    owner_id = (message.get("from") or {}).get("id")
+    await api.send_message(message["chat"]["id"],
+                           await dotcmd.allowed_text(owner_id))
 
 
 async def cmd_intercepted(api, message: dict, args: str) -> None:
-    from bot import digest
-
+    owner_id = (message.get("from") or {}).get("id")
     limit = int(args) if args.strip().isdigit() else 20
-    rows = await db.intercepted(limit=max(1, min(limit, 200)))
-    await digest.deliver(rows, title="🔇 **Перехваченные сообщения**",
-                         empty="🔇 Пока ничего не перехвачено.",
-                         owner_id=state.owner_id)
+    rows = await db.intercepted(owner_id, limit=max(1, min(limit, 200)))
+    await digest.deliver(owner_id, rows, title="🔇 **Перехваченные сообщения**",
+                         empty="🔇 Пока ничего не перехвачено.")
 
 
 async def cmd_find(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
     query = args.strip()
     if len(query) < 2:
         await api.send_message(chat_id, "Использование: `/find слово`")
         return
-    rows = await db.search_deleted(query, limit=20)
+    rows = await db.search_deleted(owner_id, query, limit=20)
     if not rows:
         await api.send_message(chat_id, f"🔍 По запросу «{query}» ничего не нашлось.")
         return
@@ -318,21 +330,62 @@ async def cmd_find(api, message: dict, args: str) -> None:
 
 
 async def cmd_export(api, message: dict, _args: str) -> None:
-    from bot import transcript
-
     chat_id = message["chat"]["id"]
-    rows = await db.last_deleted(None, 5000)
+    owner_id = (message.get("from") or {}).get("id")
+    rows = await db.last_deleted(owner_id, None, 5000)
     if not rows:
         await api.send_message(chat_id, "🗑 Журнал пуст.")
         return
     ordered = sorted(rows, key=lambda row: (row["date"] or 0, row["msg_id"] or 0))
     when = db.now()
     payload, stats = transcript.build(
-        ordered, chat_title="все чаты", owner_id=state.owner_id,
+        ordered, chat_title="все чаты", owner_id=owner_id,
         requested=len(ordered), when=when, reason="Журнал удалённых сообщений")
     await api.send_file(chat_id, payload, f"journal_{when}.txt",
                         caption=f"🗑 **Журнал удалённых**\n"
                                 f"записей: **{stats['recovered']}**")
+
+
+# ------------------------------------------------------- администратор -----
+
+async def cmd_users(api, message: dict, _args: str) -> None:
+    chat_id = message["chat"]["id"]
+    rows = await db.all_users()
+    pending = [row for row in rows if row["status"] == db.PENDING]
+    approved = [row for row in rows if row["status"] == db.APPROVED]
+    denied = [row for row in rows if row["status"] == db.DENIED]
+
+    lines = ["👥 **Пользователи бота**", ""]
+    lines.append(f"✅ доступ открыт: **{len(approved)}**")
+    for row in approved:
+        mark = " (это вы)" if state.is_admin(row["user_id"]) else ""
+        connection = "🔗" if state.business_of(row["user_id"]) else "🔌"
+        lines.append(f"  {connection} {row['name'] or '—'} (`{row['user_id']}`){mark}")
+    if denied:
+        lines.append(f"\n🚫 отклонены: {len(denied)}")
+    if pending:
+        lines.append(f"\n⏳ **ждут решения: {len(pending)}**")
+    lines.append("\n_Закрыть доступ:_ `/revoke <id>`")
+    await api.send_message(chat_id, fmt.truncate("\n".join(lines), 3500))
+
+    for row in pending:                       # заявки — с кнопками, по одной
+        await api.send_message(
+            chat_id,
+            access.request_card({"id": row["user_id"], "first_name": row["name"]},
+                                "ожидает решения"),
+            reply_markup=access.keyboard(row["user_id"]))
+
+
+async def cmd_revoke(api, message: dict, args: str) -> None:
+    chat_id = message["chat"]["id"]
+    raw = args.strip()
+    if not re.fullmatch(r"-?\d+", raw):
+        await api.send_message(chat_id, "Использование: `/revoke 123456789`")
+        return
+    if await access.revoke(int(raw)):
+        await api.send_message(chat_id, f"🚫 Доступ для `{raw}` закрыт.")
+    else:
+        await api.send_message(chat_id, "У этого пользователя и не было доступа.")
 
 
 async def cmd_backup(api, message: dict, _args: str) -> None:
@@ -348,8 +401,10 @@ async def cmd_backup(api, message: dict, _args: str) -> None:
         path.unlink(missing_ok=True)
 
 
-# Команды, доступные до подключения: они ничего не раскрывают.
+# Доступны без одобрения: ничего чужого они не раскрывают.
 PUBLIC = {"start", "connect", "help"}
+# Только администратору: касаются всех пользователей или базы целиком.
+ADMIN_ONLY = {"users", "revoke", "backup"}
 
 HANDLERS = {
     "start": cmd_start,
@@ -371,6 +426,8 @@ HANDLERS = {
     "export": cmd_export,
     "mutes": cmd_mutes,
     "unmute": cmd_unmute,
+    "users": cmd_users,
+    "revoke": cmd_revoke,
     "backup": cmd_backup,
 }
 
@@ -379,9 +436,7 @@ BACKUP_LIMIT_MB = 20          # предел getFile в Bot API
 
 
 async def restore_from_document(api, message: dict) -> None:
-    """Владелец прислал файл базы — поднимаем её вместо текущей."""
-    from modules.antidelete import invalidate_all
-
+    """Администратор прислал файл базы — поднимаем её вместо текущей."""
     document = message["document"]
     chat_id = message["chat"]["id"]
     name = document.get("file_name") or ""
@@ -418,14 +473,13 @@ async def restore_from_document(api, message: dict) -> None:
             config.DB_PATH.replace(previous)
         incoming.replace(config.DB_PATH)
         await db.init()
-        await state.load_mutes()
-        invalidate_all()
+        await reload_state()
     except Exception as e:                                   # noqa: BLE001
         log.exception("восстановление не удалось")
         if previous.exists():
             previous.replace(config.DB_PATH)
         await db.init()
-        await state.load_mutes()
+        await reload_state()
         await api.send_message(chat_id, f"⚠️ Не вышло: `{type(e).__name__}`. "
                                         "Прежняя база на месте.")
         return
@@ -435,16 +489,24 @@ async def restore_from_document(api, message: dict) -> None:
 
     stats = await db.stats()
     await api.send_message(
-        chat_id, f"✅ **База восстановлена.**\n🗂 в кэше: {stats['cached']} · "
+        chat_id, f"✅ **База восстановлена.**\n👥 пользователей: {stats['users']} · "
                  f"🗑 сохранено: {stats['deleted']} · 🔇 мутов: {stats['mutes']}")
+
+
+async def reload_state() -> None:
+    await state.load_users()
+    await state.load_mutes()
+    await state.load_allowlist()
+    chatprefs.invalidate_all()
 
 
 async def handle(api, message: dict) -> None:
     if (message.get("chat") or {}).get("type") != "private":
         return
 
-    user_id = (message.get("from") or {}).get("id")
-    if message.get("document") and owner_known() and is_owner(user_id):
+    user = message.get("from") or {}
+    user_id = user.get("id")
+    if message.get("document") and state.is_admin(user_id):
         await restore_from_document(api, message)
         return
 
@@ -456,13 +518,18 @@ async def handle(api, message: dict) -> None:
     if handler is None:
         return
 
-    if name not in PUBLIC:
-        if not owner_known():
-            await api.send_message(message["chat"]["id"],
-                                   NOT_CONNECTED + owner_id_hint(user_id))
-            return
-        if not is_owner(user_id):
-            return                      # чужому отвечать нечего
+    if name in ADMIN_ONLY and not state.is_admin(user_id):
+        return
+    if name not in PUBLIC and not state.is_approved(user_id):
+        reply = await access.request(api, user, source=f"команда /{name}",
+                                     chat_id=message["chat"]["id"])
+        await api.send_message(message["chat"]["id"], reply)
+        return
+    if name == "start" and not state.is_approved(user_id):
+        reply = await access.request(api, user, source="открыл чат с ботом",
+                                     chat_id=message["chat"]["id"])
+        await api.send_message(message["chat"]["id"], reply)
+        return
 
     try:
         await handler(api, message, match.group(2) or "")
@@ -473,6 +540,30 @@ async def handle(api, message: dict) -> None:
                                    f"⚠️ `{type(e).__name__}: {e}`")
         except Exception:
             pass
+
+
+CALLBACK_RE = re.compile(r"^(ok|no):(-?\d+)$")
+
+
+async def handle_callback(api, query: dict) -> None:
+    """Кнопки «Принять» / «Отклонить» под заявкой на доступ."""
+    data = query.get("data") or ""
+    admin = (query.get("from") or {}).get("id")
+    match = CALLBACK_RE.match(data)
+    if match is None:
+        await api.answer_callback(query["id"])
+        return
+
+    card, toast = await access.decide(api, admin, match.group(1),
+                                      int(match.group(2)))
+    await api.answer_callback(query["id"], toast, show_alert=not card)
+    if not card:
+        return
+    origin = query.get("message") or {}
+    try:
+        await api.edit_message_text(origin["chat"]["id"], origin["message_id"], card)
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("карточку заявки не удалось обновить: %r", e)
 
 
 async def publish_menu(api) -> None:

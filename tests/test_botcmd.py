@@ -7,7 +7,7 @@ import config
 import db
 from bot import commands, dotcmd  # noqa: F401
 from core import state
-from tests.fakes import ALL_RIGHTS, FakeBotAPI
+from tests.fakes import ALL_RIGHTS, FakeBotAPI, approve
 
 OWNER = 111
 STRANGER = 999
@@ -23,30 +23,31 @@ def message(text, *, from_id=OWNER, chat_type="private"):
 
 @pytest.fixture(autouse=True)
 def env():
-    from modules.antidelete import invalidate_all
+    from core import chatprefs
 
     config.DB_PATH.unlink(missing_ok=True)
     asyncio.run(db.init())
-    invalidate_all()
+    chatprefs.invalidate_all()
     state.business.clear()
     state.mutes.clear()
     state.forget_own_deletions()
-    asyncio.run(state.load_dnd())
-    asyncio.run(state.load_allowlist())
+    state.users.clear()
+    state.allowlist.clear()
+    config.OWNER_ID = 0
     state.client = None
-    state.owner_id = 0
-    state.owner_chat_id = 0
     state.bot_user = {"username": "guard_test_bot"}
     state.api = FakeBotAPI()
     yield
+    config.OWNER_ID = 0
     asyncio.run(db.close())
     state.api = None
     state.business.clear()
 
 
-def connected():
-    state.owner_id = OWNER
-    state.owner_chat_id = OWNER
+def connected(admin: bool = True):
+    if admin:
+        config.OWNER_ID = OWNER
+    approve(OWNER, OWNER)
     state.business[BIZ] = {"user_id": OWNER, "user_chat_id": OWNER,
                            "is_enabled": True, "rights": dict(ALL_RIGHTS)}
 
@@ -59,6 +60,8 @@ def run(text, **kwargs):
 # ----------------------------------------------------------- инструкция ----
 
 def test_start_gives_connection_steps_when_not_connected():
+    connected()
+    state.business.clear()
     api = run("/start")
     text = api.texts[0]
     assert "Telegram Premium" in text
@@ -67,14 +70,21 @@ def test_start_gives_connection_steps_when_not_connected():
     assert "удалять сообщения" in text
 
 
-def test_instructions_start_with_the_botfather_toggle():
-    """Без Business Mode в @BotFather Telegram отвечает «не поддерживает режим
-    секретаря» — на этом спотыкаются раньше всего остального."""
-    text = run("/start").texts[0]
-    assert "BotFather" in text and "Business Mode" in text
-    assert "режим секретаря" in text
-    assert text.index("BotFather") < text.index("Telegram для бизнеса"), \
-        "тумблер включают до подключения к чатам"
+def test_botfather_step_is_shown_to_the_admin_only():
+    """Включение Business Mode — разовое дело того, кто создавал бота.
+    Обычному пользователю про @BotFather знать незачем."""
+    connected()
+    state.business.clear()
+    admin_text = run("/start").texts[0]
+    assert "BotFather" in admin_text and "Business Mode" in admin_text
+    assert "режим секретаря" in admin_text
+    assert admin_text.index("BotFather") < admin_text.index("Telegram для бизнеса")
+
+    config.OWNER_ID = 999                       # теперь мы обычный пользователь
+    approve(OWNER, OWNER)
+    user_text = run("/start").texts[-1]
+    assert "BotFather" not in user_text and "Business Mode" not in user_text
+    assert "Чат-боты" in user_text, "инструкция по подключению остаётся"
 
 
 def test_connect_works_for_anyone_before_setup():
@@ -91,37 +101,28 @@ def test_start_after_connection_shows_the_command_list():
 
 def test_start_remembers_owner_chat():
     connected()
-    state.owner_chat_id = 0
+    state.users[OWNER]["chat_id"] = 0
     run("/start")
-    assert state.owner_chat_id == OWNER
+    assert state.chat_of(OWNER) == OWNER
 
 
 # ------------------------------------------------------------- доступ ------
 
-def test_data_commands_require_a_connection():
-    api = run("/deleted")
+def test_data_commands_work_only_after_connection():
+    connected()
+    state.business.clear()
+    api = run("/help")
     text = api.texts[0]
     assert "/connect" in text
     assert "напишите что-нибудь в любом личном чате" in text.lower(), \
         "подсказка про самовосстановление важнее инструкции по подключению"
 
 
-def test_owner_id_hint_shown_only_when_it_is_not_set():
-    api = run("/deleted")
-    assert "OWNER_ID=111" in api.texts[0], "id подставлен, чтобы скопировать"
-
-    config.OWNER_ID = OWNER
-    try:
-        api = run("/deleted")
-        assert "OWNER_ID" not in api.texts[-1]
-    finally:
-        config.OWNER_ID = 0
-
-
-def test_stranger_gets_no_data():
+def test_stranger_gets_an_access_request_instead_of_data():
     connected()
     api = run("/deleted", from_id=STRANGER)
-    assert api.sent == [], "чужому отвечать нечего"
+    assert not any("Последние удалённые" in text for text in api.texts)
+    assert any("Доступ пока не открыт" in text for text in api.texts)
 
 
 def test_group_messages_are_ignored():
@@ -146,15 +147,16 @@ def test_status_lists_rights_when_connected():
 
 
 def test_status_without_connection_points_to_connect():
-    state.owner_id = OWNER          # владелец известен из OWNER_ID, но Business нет
+    config.OWNER_ID = OWNER         # админ известен, но Business ещё нет
+    approve(OWNER, OWNER)
     api = run("/status")
     assert "/connect" in api.texts[0]
 
 
 def test_deleted_shows_journal():
     connected()
-    asyncio.run(db.add_deleted({"chat_id": 5, "msg_id": 1, "user_id": 7,
-                                "text": "секрет", "media_type": None,
+    asyncio.run(db.add_deleted({"owner_id": OWNER, "chat_id": 5, "msg_id": 1,
+                                "user_id": 7, "text": "секрет", "media_type": None,
                                 "media_ref": None, "date": db.now(),
                                 "user_name": "Вася", "file_id": None}))
     api = run("/deleted 5")
@@ -163,14 +165,14 @@ def test_deleted_shows_journal():
 
 def test_mutes_and_unmute():
     connected()
-    asyncio.run(state.mute_user(5, 7, 0))
-    asyncio.run(state.mute_user(0, 7, 0))
+    asyncio.run(state.mute_user(OWNER, 5, 7, 0))
+    asyncio.run(state.mute_user(OWNER, 0, 7, 0))
     api = run("/mutes")
     assert "7" in api.texts[0]
 
     api = run("/unmute 7")
     assert "снято: **2**" in api.texts[-1]
-    assert not asyncio.run(state.is_muted(5, 7))
+    assert not asyncio.run(state.is_muted(OWNER, 5, 7))
 
 
 def test_unmute_validates_its_argument():
@@ -200,25 +202,25 @@ def test_uploaded_backup_replaces_the_database():
     from core import backup
 
     connected()
-    asyncio.run(state.mute_user(5, 7, 0))
+    asyncio.run(state.mute_user(OWNER, 5, 7, 0))
     snapshot = asyncio.run(backup.make_backup())
     payload = snapshot.read_bytes()
     snapshot.unlink()
 
-    asyncio.run(state.unmute_user(5, 7))          # «потеряли» состояние
+    asyncio.run(state.unmute_user(OWNER, 5, 7))   # «потеряли» состояние
     assert state.mutes == {}
 
     state.api.downloads["documents/BQAC1"] = payload
     asyncio.run(commands.handle(state.api, document_message()))
 
     assert "восстановлена" in state.api.texts[-1]
-    assert asyncio.run(state.is_muted(5, 7)), "мут вернулся вместе с базой"
+    assert asyncio.run(state.is_muted(OWNER, 5, 7)), "мут вернулся вместе с базой"
 
 
 def test_broken_upload_never_touches_the_working_database():
     """Чужой файл не должен уничтожить рабочую базу."""
     connected()
-    asyncio.run(state.mute_user(5, 7, 0))
+    asyncio.run(state.mute_user(OWNER, 5, 7, 0))
     state.api.downloads["documents/BQAC1"] = "это не sqlite".encode()
 
     asyncio.run(commands.handle(state.api, document_message()))

@@ -17,7 +17,7 @@ import config
 import db
 from bot import digest, parse, transcript
 from bot.editable import BizMessage
-from core import anim, fmt, state
+from core import anim, chatprefs, fmt, state
 
 log = logging.getLogger("dotcmd")
 
@@ -51,6 +51,7 @@ class BizCtx:
     api: object
     message: dict
     connection_id: str
+    owner_id: int
     args: list[str] = field(default_factory=list)
     flags: set[str] = field(default_factory=set)
     raw: str = ""
@@ -64,10 +65,6 @@ class BizCtx:
         return self.message["message_id"]
 
     @property
-    def owner_id(self) -> int:
-        return (state.business.get(self.connection_id) or {}).get("user_id", 0)
-
-    @property
     def reply(self) -> dict | None:
         return self.message.get("reply_to_message")
 
@@ -78,7 +75,7 @@ class BizCtx:
         try:
             await self.api.delete_business_messages(self.connection_id,
                                                     [self.message_id])
-            state.mark_own_deletion(self.chat_id, self.message_id)
+            state.mark_own_deletion(self.owner_id, self.chat_id, self.message_id)
             return True
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось убрать команду из переписки: %r", e)
@@ -103,7 +100,7 @@ class BizCtx:
     async def private(self, text: str) -> None:
         """Отвечает в личку с ботом — собеседник ничего не видит."""
         await self.drop_command()
-        target = state.owner_chat_id or self.owner_id
+        target = state.chat_of(self.owner_id)
         if not target:
             return
         try:
@@ -156,7 +153,8 @@ async def cmd_mute(ctx: BizCtx) -> None:
     reason = " ".join(rest[1:] if (rest and seconds is not None) else rest)
     seconds = seconds or 0
     until = int(time.time()) + seconds if seconds else 0
-    await state.mute_user(0 if everywhere else ctx.chat_id, user_id, until, reason)
+    await state.mute_user(ctx.owner_id, 0 if everywhere else ctx.chat_id,
+                          user_id, until, reason)
 
     is_peer = user_id == ctx.chat_id
     if seconds:
@@ -178,10 +176,11 @@ async def cmd_unmute(ctx: BizCtx) -> None:
         await ctx.fail("Кого размутить?")
         return
 
-    mute = (await db.get_mute(ctx.chat_id, user_id)) or (await db.get_mute(0, user_id))
+    mute = (await db.get_mute(ctx.owner_id, ctx.chat_id, user_id)
+            or await db.get_mute(ctx.owner_id, 0, user_id))
     since = mute["created_at"] if mute else 0
-    existed = await state.unmute_user(ctx.chat_id, user_id)
-    existed = await state.unmute_user(0, user_id) or existed
+    existed = await state.unmute_user(ctx.owner_id, ctx.chat_id, user_id)
+    existed = await state.unmute_user(ctx.owner_id, 0, user_id) or existed
     if not existed:
         await ctx.fail("Этот пользователь и не был замучен.")
         return
@@ -189,24 +188,26 @@ async def cmd_unmute(ctx: BizCtx) -> None:
     text = ("🔊 **С вас снят мут. Можете писать.**" if user_id == ctx.chat_id
             else f"🔊 **С {who} снят мут.**")
     await ctx.notice(text, icon="🔊")
-    await mute_digest(user_id, who, since)
+    await mute_digest(ctx.owner_id, user_id, who, since)
 
 
-async def mute_digest(user_id: int, who: str, since: int) -> None:
+async def mute_digest(owner_id: int, user_id: int, who: str, since: int) -> None:
     """Что человек написал, пока был замучен."""
-    rows = await db.intercepted(user_id, since=since, reason="mute", limit=500)
+    rows = await db.intercepted(owner_id, user_id, since=since, reason="mute",
+                                limit=500)
     if rows:
-        await digest.deliver(rows, title=f"🔇 **Пока {who} был(а) замучен(а)**",
-                             empty="", chat_title=who)
+        await digest.deliver(owner_id, rows, empty="",
+                             title=f"🔇 **Пока {who} был(а) замучен(а)**",
+                             chat_title=who)
 
 
 @bizcmd("mutelist", desc="список активных мутов", aliases=["mutes"])
 async def cmd_mutelist(ctx: BizCtx) -> None:
-    await ctx.private(await mute_list_text())
+    await ctx.private(await mute_list_text(ctx.owner_id))
 
 
-async def mute_list_text() -> str:
-    rows = await db.all_mutes()
+async def mute_list_text(owner_id: int) -> str:
+    rows = await db.all_mutes(owner_id)
     now = int(time.time())
     lines = ["🔇 **Активные муты**", ""]
     for row in rows:
@@ -229,19 +230,19 @@ async def cmd_gmute(ctx: BizCtx) -> None:
         await ctx.fail("У бота нет права удалять сообщения собеседника — "
                        "режим «не беспокоить» работать не будет.")
         return
-    await state.set_dnd()
+    await state.set_dnd(ctx.owner_id)
     await ctx.private(dnd_enabled_text())
 
 
 @bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
 async def cmd_ungmute(ctx: BizCtx) -> None:
-    if not state.dnd_active():
+    if not state.dnd_active(ctx.owner_id):
         await ctx.fail("Режим «не беспокоить» и так выключен.")
         return
-    since = state.dnd_since
-    await state.clear_dnd()
+    since = state.dnd_since(ctx.owner_id)
+    await state.clear_dnd(ctx.owner_id)
     await ctx.private(dnd_disabled_text(since))
-    await dnd_digest(since)
+    await dnd_digest(ctx.owner_id, since)
 
 
 def dnd_enabled_text() -> str:
@@ -259,9 +260,9 @@ def dnd_disabled_text(since: int) -> str:
     return f"☀️ **Режим «не беспокоить» выключен.** Сообщения снова доходят.{spent}"
 
 
-async def dnd_digest(since: int) -> None:
-    rows = await db.intercepted(since=since, reason="dnd", limit=500)
-    await digest.deliver(rows, title="🌙 **Пока вас не беспокоили**",
+async def dnd_digest(owner_id: int, since: int) -> None:
+    rows = await db.intercepted(owner_id, since=since, reason="dnd", limit=500)
+    await digest.deliver(owner_id, rows, title="🌙 **Пока вас не беспокоили**",
                          empty="🌙 За это время вам никто не писал.")
 
 
@@ -272,7 +273,7 @@ async def cmd_allow(ctx: BizCtx) -> None:
     if user_id is None:
         await ctx.fail("Кого пропускать? Ответьте на сообщение или укажите id.")
         return
-    await state.allow_user(user_id, who)
+    await state.allow_user(ctx.owner_id, user_id, who)
     await ctx.private(f"✅ {who} (`{user_id}`) теперь проходит сквозь режим "
                       f"«не беспокоить».")
 
@@ -283,18 +284,18 @@ async def cmd_deny(ctx: BizCtx) -> None:
     if user_id is None:
         await ctx.fail("Кого убрать?")
         return
-    removed = await state.deny_user(user_id)
+    removed = await state.deny_user(ctx.owner_id, user_id)
     await ctx.private(f"🚫 {who} убран(а) из белого списка." if removed
                       else "Его и не было в белом списке.")
 
 
 @bizcmd("allowed", desc="белый список «не беспокоить»")
 async def cmd_allowed(ctx: BizCtx) -> None:
-    await ctx.private(await allowed_text())
+    await ctx.private(await allowed_text(ctx.owner_id))
 
 
-async def allowed_text() -> str:
-    rows = await db.allowed_users()
+async def allowed_text(owner_id: int) -> str:
+    rows = await db.allowed_users(owner_id)
     if not rows:
         return "✅ Белый список пуст — в режиме «не беспокоить» удаляются все."
     lines = ["✅ **Белый список**", ""]
@@ -305,11 +306,11 @@ async def allowed_text() -> str:
 @bizcmd("muted", args="[N]", desc="что перехвачено мутом и «не беспокоить»")
 async def cmd_muted(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 20
-    rows = await db.intercepted(limit=max(1, min(limit, 200)))
+    rows = await db.intercepted(ctx.owner_id, limit=max(1, min(limit, 200)))
     await ctx.drop_command()
-    await digest.deliver(rows, title="🔇 **Перехваченные сообщения**",
-                         empty="🔇 Пока ничего не перехвачено.",
-                         owner_id=ctx.owner_id)
+    await digest.deliver(ctx.owner_id, rows,
+                         title="🔇 **Перехваченные сообщения**",
+                         empty="🔇 Пока ничего не перехвачено.")
 
 
 # ---------------------------------------------------------------- чистка ----
@@ -322,7 +323,7 @@ async def cmd_del(ctx: BizCtx) -> None:
     ids = [ctx.reply["message_id"], ctx.message_id]
     try:
         await ctx.api.delete_business_messages(ctx.connection_id, ids)
-        state.mark_own_deletion(ctx.chat_id, *ids)
+        state.mark_own_deletion(ctx.owner_id, ctx.chat_id, *ids)
     except Exception as e:                                   # noqa: BLE001
         await ctx.fail(f"Не удалось удалить: `{type(e).__name__}`")
 
@@ -338,11 +339,11 @@ async def cmd_purge(ctx: BizCtx) -> None:
         batch = ids[start:start + 100]
         try:
             await ctx.api.delete_business_messages(ctx.connection_id, batch)
-            state.mark_own_deletion(ctx.chat_id, *batch)
+            state.mark_own_deletion(ctx.owner_id, ctx.chat_id, *batch)
             removed += len(batch)
         except Exception as e:                               # noqa: BLE001
             log.warning("пачка не удалилась: %r", e)
-    target = state.owner_chat_id or ctx.owner_id
+    target = state.chat_of(ctx.owner_id)
     if target:
         await ctx.api.send_message(target, f"🧹 Удалено сообщений: **{removed}**")
 
@@ -350,12 +351,10 @@ async def cmd_purge(ctx: BizCtx) -> None:
 # ------------------------------------------------------------ антиудаление --
 
 async def _toggle(ctx: BizCtx, key: str, label: str) -> None:
-    from modules.antidelete import flags, invalidate
-    current = (await flags(ctx.chat_id, True))[key]
+    current = (await chatprefs.flags(ctx.owner_id, ctx.chat_id, True))[key]
     value = (not current) if not ctx.args else ctx.args[0].lower() in {
         "on", "вкл", "1", "да", "yes", "true"}
-    await db.set_setting(ctx.chat_id, key, int(value))
-    invalidate(ctx.chat_id)
+    await chatprefs.toggle(ctx.owner_id, ctx.chat_id, key, value)
     await ctx.private(f"{'✅' if value else '🚫'} {label}: "
                       f"**{'включено' if value else 'выключено'}** для этого чата.")
 
@@ -374,7 +373,7 @@ async def cmd_ignore(ctx: BizCtx) -> None:
 @bizcmd("deleted", args="[N]", desc="последние удалённые в этом чате", aliases=["dels"])
 async def cmd_deleted(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 10
-    rows = await db.last_deleted(ctx.chat_id, max(1, min(limit, 30)))
+    rows = await db.last_deleted(ctx.owner_id, ctx.chat_id, max(1, min(limit, 30)))
     if not rows:
         await ctx.private("🗑 Удалённых сообщений в этом чате нет.")
         return
@@ -391,7 +390,7 @@ async def cmd_deleted(ctx: BizCtx) -> None:
 async def cmd_export(ctx: BizCtx) -> None:
     from core import reporter
 
-    rows = await db.last_deleted(ctx.chat_id, 5000)
+    rows = await db.last_deleted(ctx.owner_id, ctx.chat_id, 5000)
     await ctx.drop_command()
     if not rows:
         await ctx.private("🗑 В этом чате нечего выгружать.")
@@ -403,7 +402,7 @@ async def cmd_export(ctx: BizCtx) -> None:
         owner_id=ctx.owner_id, requested=len(ordered), when=when,
         reason="Журнал удалённых сообщений")
     await reporter.send_document(
-        payload, transcript.filename(ctx.chat_id, when),
+        ctx.owner_id, payload, transcript.filename(ctx.chat_id, when),
         f"🗑 **Журнал удалённых**\n💬 {parse.display_name(ctx.message.get('chat'))}\n"
         f"записей: **{len(ordered)}**")
 
@@ -425,7 +424,7 @@ async def cmd_ping(ctx: BizCtx) -> None:
     started = time.perf_counter()
     await ctx.drop_command()
     delay = (time.perf_counter() - started) * 1000
-    target = state.owner_chat_id or ctx.owner_id
+    target = state.chat_of(ctx.owner_id)
     if target:
         await ctx.api.send_message(
             target, f"🏓 **{delay:.0f} мс**\n"
@@ -434,7 +433,7 @@ async def cmd_ping(ctx: BizCtx) -> None:
 
 @bizcmd("stats", desc="статистика базы")
 async def cmd_stats(ctx: BizCtx) -> None:
-    s = await db.stats()
+    s = await db.stats(ctx.owner_id)
     await ctx.private(
         "📊 **Статистика**\n"
         f"🗂 в кэше: **{s['cached']}**\n"
@@ -474,7 +473,7 @@ PATTERN = re.compile(rf"^{re.escape(config.PREFIX)}(\w+)(?:\s+([\s\S]*))?$")
 FLAG_RE = re.compile(r"^-[^\W\d_]")
 
 
-async def handle(api, message: dict, connection_id: str) -> None:
+async def handle(api, message: dict, connection_id: str, owner_id: int) -> None:
     match = PATTERN.match(parse.text_of(message))
     if match is None:
         return
@@ -485,7 +484,7 @@ async def handle(api, message: dict, connection_id: str) -> None:
     raw = (match.group(2) or "").strip()
     tokens = raw.split()
     ctx = BizCtx(
-        api=api, message=message, connection_id=connection_id,
+        api=api, message=message, connection_id=connection_id, owner_id=owner_id,
         args=[t for t in tokens if not FLAG_RE.match(t)],
         flags={t.lstrip("-").lower() for t in tokens if FLAG_RE.match(t)},
         raw=raw,

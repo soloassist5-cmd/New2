@@ -1,4 +1,10 @@
-"""Слой доступа к SQLite (aiosqlite). Один процесс — одно соединение."""
+"""Слой доступа к SQLite (aiosqlite). Один процесс — одно соединение.
+
+Бот многопользовательский: у каждого владельца свои чаты, муты и журнал,
+поэтому owner_id входит в ключ почти каждой таблицы. Без этого пользователи
+видели бы переписку друг друга — id личного чата в Bot API совпадает с id
+собеседника и одинаков для всех владельцев.
+"""
 from __future__ import annotations
 
 import time
@@ -11,11 +17,25 @@ import config
 
 _conn: aiosqlite.Connection | None = None
 
+SCHEMA_VERSION = 2
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
+-- Люди, которым разрешено пользоваться ботом, плюс их персональные флаги.
+CREATE TABLE IF NOT EXISTS users (
+    user_id      INTEGER PRIMARY KEY,
+    name         TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | denied
+    chat_id      INTEGER,                           -- личка с ботом
+    dnd_since    INTEGER NOT NULL DEFAULT 0,        -- 0 = «не беспокоить» выключен
+    requested_at INTEGER NOT NULL,
+    decided_at   INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS messages (
+    owner_id   INTEGER NOT NULL,
     chat_id    INTEGER NOT NULL,
     msg_id     INTEGER NOT NULL,
     user_id    INTEGER,
@@ -23,69 +43,47 @@ CREATE TABLE IF NOT EXISTS messages (
     text       TEXT,
     media_type TEXT,
     media_ref  INTEGER,
+    file_id    TEXT,
+    business_id TEXT,
+    user_name  TEXT,
     reply_to   INTEGER,
     date       INTEGER NOT NULL,
-    PRIMARY KEY (chat_id, msg_id)
+    PRIMARY KEY (owner_id, chat_id, msg_id)
 );
-CREATE INDEX IF NOT EXISTS idx_msg_id   ON messages(msg_id);
+CREATE INDEX IF NOT EXISTS idx_msg_id   ON messages(owner_id, msg_id);
 CREATE INDEX IF NOT EXISTS idx_msg_date ON messages(date);
 
 CREATE TABLE IF NOT EXISTS deleted (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id   INTEGER NOT NULL,
     chat_id    INTEGER,
     msg_id     INTEGER,
     user_id    INTEGER,
+    user_name  TEXT,
     text       TEXT,
     media_type TEXT,
     media_ref  INTEGER,
+    file_id    TEXT,
     date       INTEGER,
     deleted_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_del_chat ON deleted(chat_id, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_del_chat ON deleted(owner_id, chat_id, deleted_at);
 
 CREATE TABLE IF NOT EXISTS edits (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id    INTEGER,
-    msg_id     INTEGER,
-    user_id    INTEGER,
-    old_text   TEXT,
-    new_text   TEXT,
-    edited_at  INTEGER NOT NULL
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id  INTEGER NOT NULL,
+    chat_id   INTEGER,
+    msg_id    INTEGER,
+    user_id   INTEGER,
+    old_text  TEXT,
+    new_text  TEXT,
+    edited_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mutes (
-    chat_id    INTEGER NOT NULL,   -- 0 = глобальный мут
-    user_id    INTEGER NOT NULL,
-    until      INTEGER NOT NULL DEFAULT 0,  -- 0 = бессрочно
-    reason     TEXT,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (chat_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-    chat_id    INTEGER PRIMARY KEY,
-    antidelete INTEGER,
-    log_edits  INTEGER,
-    save_media INTEGER,
-    ignored    INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS notes (
-    chat_id INTEGER NOT NULL,
-    name    TEXT NOT NULL,
-    content TEXT,
-    PRIMARY KEY (chat_id, name)
-);
-
-CREATE TABLE IF NOT EXISTS kv (
-    k TEXT PRIMARY KEY,
-    v TEXT
-);
-
--- Что бот удалил за нас: мут конкретного человека или режим «не беспокоить».
--- Живёт отдельно от deleted: это не чужие удаления, а наши перехваты.
+-- Что бот удалил за владельца: мут конкретного человека или «не беспокоить».
 CREATE TABLE IF NOT EXISTS intercepted (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id   INTEGER NOT NULL,
     chat_id    INTEGER,
     msg_id     INTEGER,
     user_id    INTEGER,
@@ -97,17 +95,45 @@ CREATE TABLE IF NOT EXISTS intercepted (
     at         INTEGER NOT NULL,
     reason     TEXT NOT NULL DEFAULT 'mute'
 );
-CREATE INDEX IF NOT EXISTS idx_intercepted_user ON intercepted(user_id, at);
+CREATE INDEX IF NOT EXISTS idx_intercepted ON intercepted(owner_id, user_id, at);
+
+CREATE TABLE IF NOT EXISTS mutes (
+    owner_id   INTEGER NOT NULL,
+    chat_id    INTEGER NOT NULL,   -- 0 = во всех чатах владельца
+    user_id    INTEGER NOT NULL,
+    until      INTEGER NOT NULL DEFAULT 0,
+    reason     TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (owner_id, chat_id, user_id)
+);
 
 -- Кого «не беспокоить» пропускает.
 CREATE TABLE IF NOT EXISTS allowlist (
-    user_id  INTEGER PRIMARY KEY,
+    owner_id INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
     name     TEXT,
-    added_at INTEGER NOT NULL
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (owner_id, user_id)
 );
 
--- Подключения Telegram Business: бот, добавленный в Настройки -> Telegram
--- Business -> Чат-боты, получает права на личные чаты владельца.
+CREATE TABLE IF NOT EXISTS settings (
+    owner_id   INTEGER NOT NULL,
+    chat_id    INTEGER NOT NULL,
+    antidelete INTEGER,
+    log_edits  INTEGER,
+    save_media INTEGER,
+    ignored    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (owner_id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS notes (
+    owner_id INTEGER NOT NULL,
+    chat_id  INTEGER NOT NULL,
+    name     TEXT NOT NULL,
+    content  TEXT,
+    PRIMARY KEY (owner_id, chat_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS business (
     connection_id TEXT PRIMARY KEY,
     user_id       INTEGER NOT NULL,
@@ -116,13 +142,16 @@ CREATE TABLE IF NOT EXISTS business (
     rights        TEXT,
     connected_at  INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS kv (
+    k TEXT PRIMARY KEY,
+    v TEXT
+);
 """
 
-# Добавляются к уже существующим базам без потери данных.
-MIGRATIONS = {
-    "messages": {"file_id": "TEXT", "business_id": "TEXT", "user_name": "TEXT"},
-    "deleted": {"file_id": "TEXT", "user_name": "TEXT"},
-}
+# Таблицы, которые в первой версии схемы жили без owner_id.
+V1_TABLES = ("messages", "deleted", "edits", "intercepted", "mutes",
+             "allowlist", "settings", "notes")
 
 
 def now() -> int:
@@ -135,10 +164,10 @@ async def init() -> None:
     connection = await aiosqlite.connect(config.DB_PATH)
     connection.row_factory = aiosqlite.Row
     try:
-        await connection.executescript(SCHEMA)
         _conn = connection
-        await _migrate()
-        await _conn.commit()
+        await _migrate_to_v2(connection)
+        await connection.executescript(SCHEMA)
+        await connection.commit()
     except Exception:
         # Иначе останется висеть рабочий поток aiosqlite и битое соединение.
         _conn = None
@@ -146,14 +175,57 @@ async def init() -> None:
         raise
 
 
-async def _migrate() -> None:
-    """Досоздаёт колонки, появившиеся в новых версиях."""
-    for table, columns in MIGRATIONS.items():
-        async with _conn.execute(f"PRAGMA table_info({table})") as cur:
-            existing = {row[1] for row in await cur.fetchall()}
-        for name, sql_type in columns.items():
-            if name not in existing:
-                await _conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+async def _migrate_to_v2(connection: aiosqlite.Connection) -> None:
+    """Переносит данные одного владельца в многопользовательскую схему."""
+    async with connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'") as cur:
+        tables = {row[0] for row in await cur.fetchall()}
+    if "messages" not in tables:
+        return                                   # свежая база — мигрировать нечего
+    async with connection.execute("PRAGMA table_info(messages)") as cur:
+        columns = {row[1] for row in await cur.fetchall()}
+    if "owner_id" in columns:
+        return                                   # уже v2
+
+    owner = config.OWNER_ID
+    if not owner and "business" in tables:
+        async with connection.execute(
+                "SELECT user_id FROM business LIMIT 1") as cur:
+            row = await cur.fetchone()
+            owner = row[0] if row else 0
+
+    for table in V1_TABLES:
+        if table in tables:
+            await connection.execute(f"ALTER TABLE {table} RENAME TO {table}_v1")
+    await connection.executescript(SCHEMA)
+
+    for table in V1_TABLES:
+        if f"{table}_v1" not in {f"{t}_v1" for t in tables if t in V1_TABLES}:
+            continue
+        async with connection.execute(f"PRAGMA table_info({table}_v1)") as cur:
+            old_columns = [row[1] for row in await cur.fetchall()]
+        async with connection.execute(f"PRAGMA table_info({table})") as cur:
+            new_columns = {row[1] for row in await cur.fetchall()}
+        shared = [name for name in old_columns if name in new_columns]
+        fields = ", ".join(shared)
+        await connection.execute(
+            f"INSERT OR IGNORE INTO {table}(owner_id, {fields}) "
+            f"SELECT ?, {fields} FROM {table}_v1", (owner,))
+        await connection.execute(f"DROP TABLE {table}_v1")
+
+    # «Не беспокоить» переехал из kv в users.
+    async with connection.execute("SELECT v FROM kv WHERE k='dnd_on'") as cur:
+        row = await cur.fetchone()
+    if row and row[0] and owner:
+        async with connection.execute("SELECT v FROM kv WHERE k='dnd_since'") as cur:
+            since_row = await cur.fetchone()
+        since = int(since_row[0]) if since_row and since_row[0] else now()
+        await connection.execute(
+            "INSERT INTO users(user_id,status,dnd_since,requested_at) "
+            "VALUES (?,'approved',?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET dnd_since=excluded.dnd_since",
+            (owner, since, now()))
+    await connection.commit()
 
 
 async def is_valid_database(path) -> bool:
@@ -208,58 +280,84 @@ async def scalar(sql: str, params: Iterable[Any] = (), default=0):
     return row[0]
 
 
+# ------------------------------------------------------------ пользователи --
+
+APPROVED, PENDING, DENIED = "approved", "pending", "denied"
+
+
+async def upsert_user(user_id: int, *, name: str | None = None,
+                      chat_id: int | None = None,
+                      status: str | None = None) -> dict:
+    await execute(
+        """INSERT INTO users(user_id,name,chat_id,status,requested_at)
+           VALUES (?,?,?,COALESCE(?, 'pending'),?)
+           ON CONFLICT(user_id) DO UPDATE SET
+                name=COALESCE(excluded.name, users.name),
+                chat_id=COALESCE(excluded.chat_id, users.chat_id),
+                status=COALESCE(?, users.status),
+                decided_at=CASE WHEN ? IS NULL THEN users.decided_at ELSE ? END""",
+        (user_id, name, chat_id, status, now(), status, status, now()))
+    return await get_user(user_id)
+
+
+async def get_user(user_id: int):
+    return await fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
+
+
+async def users_by_status(status: str):
+    return await fetchall("SELECT * FROM users WHERE status=? ORDER BY requested_at",
+                          (status,))
+
+
+async def all_users():
+    return await fetchall("SELECT * FROM users ORDER BY requested_at")
+
+
+async def set_dnd_since(user_id: int, since: int) -> None:
+    await execute(
+        "INSERT INTO users(user_id,status,dnd_since,requested_at) "
+        "VALUES (?,'approved',?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET dnd_since=excluded.dnd_since",
+        (user_id, since, now()))
+
+
 # ---------------------------------------------------------------- messages ---
 
-async def cache_message(
-    chat_id: int,
-    msg_id: int,
-    user_id: int | None,
-    is_private: bool,
-    text: str | None,
-    media_type: str | None,
-    media_ref: int | None,
-    reply_to: int | None,
-    date: int,
-    file_id: str | None = None,
-    business_id: str | None = None,
-    user_name: str | None = None,
-) -> None:
+async def cache_message(owner_id: int, chat_id: int, msg_id: int,
+                        user_id: int | None, is_private: bool, text: str | None,
+                        media_type: str | None, media_ref: int | None,
+                        reply_to: int | None, date: int,
+                        file_id: str | None = None, business_id: str | None = None,
+                        user_name: str | None = None) -> None:
     await execute(
-        """INSERT INTO messages(chat_id,msg_id,user_id,is_private,text,media_type,
-                                media_ref,reply_to,date,file_id,business_id,user_name)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(chat_id,msg_id) DO UPDATE SET
+        """INSERT INTO messages(owner_id,chat_id,msg_id,user_id,is_private,text,
+                                media_type,media_ref,reply_to,date,file_id,
+                                business_id,user_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(owner_id,chat_id,msg_id) DO UPDATE SET
                 text=excluded.text,
                 media_type=excluded.media_type,
                 media_ref=COALESCE(excluded.media_ref, messages.media_ref),
                 file_id=COALESCE(excluded.file_id, messages.file_id),
                 business_id=COALESCE(excluded.business_id, messages.business_id),
                 user_name=COALESCE(excluded.user_name, messages.user_name)""",
-        (chat_id, msg_id, user_id, int(is_private), text, media_type,
-         media_ref, reply_to, date, file_id, business_id, user_name),
-    )
+        (owner_id, chat_id, msg_id, user_id, int(is_private), text, media_type,
+         media_ref, reply_to, date, file_id, business_id, user_name))
 
 
-async def set_media_ref(chat_id: int, msg_id: int, ref: int) -> None:
-    await execute("UPDATE messages SET media_ref=? WHERE chat_id=? AND msg_id=?",
-                  (ref, chat_id, msg_id))
+async def set_media_ref(owner_id: int, chat_id: int, msg_id: int, ref: int) -> None:
+    await execute("UPDATE messages SET media_ref=? "
+                  "WHERE owner_id=? AND chat_id=? AND msg_id=?",
+                  (ref, owner_id, chat_id, msg_id))
 
 
-async def get_message(chat_id: int, msg_id: int):
-    return await fetchone("SELECT * FROM messages WHERE chat_id=? AND msg_id=?",
-                          (chat_id, msg_id))
-
-
-async def find_private_message(msg_id: int):
-    """UpdateDeleteMessages в личках не содержит chat_id — ищем по одному msg_id."""
+async def get_message(owner_id: int, chat_id: int, msg_id: int):
     return await fetchone(
-        "SELECT * FROM messages WHERE msg_id=? AND is_private=1 "
-        "ORDER BY date DESC LIMIT 1",
-        (msg_id,),
-    )
+        "SELECT * FROM messages WHERE owner_id=? AND chat_id=? AND msg_id=?",
+        (owner_id, chat_id, msg_id))
 
 
-async def get_messages(chat_id: int, msg_ids: list[int]):
+async def get_messages(owner_id: int, chat_id: int, msg_ids: list[int]):
     """Сообщения чата по списку id, по порядку. SQLite ограничивает число
     подстановок в запросе, поэтому идём частями."""
     found = []
@@ -267,98 +365,81 @@ async def get_messages(chat_id: int, msg_ids: list[int]):
         chunk = msg_ids[start:start + 400]
         placeholders = ",".join("?" * len(chunk))
         found += await fetchall(
-            f"SELECT * FROM messages WHERE chat_id=? AND msg_id IN ({placeholders})",
-            (chat_id, *chunk))
+            f"SELECT * FROM messages WHERE owner_id=? AND chat_id=? "
+            f"AND msg_id IN ({placeholders})", (owner_id, chat_id, *chunk))
     return sorted(found, key=lambda row: (row["date"], row["msg_id"]))
 
 
-async def drop_messages(chat_id: int, msg_ids: list[int]) -> None:
+async def find_private_message(owner_id: int, msg_id: int):
+    """У юзербота событие удаления в личке не содержит chat_id."""
+    return await fetchone(
+        "SELECT * FROM messages WHERE owner_id=? AND msg_id=? AND is_private=1 "
+        "ORDER BY date DESC LIMIT 1", (owner_id, msg_id))
+
+
+async def drop_message(owner_id: int, chat_id: int, msg_id: int) -> None:
+    await execute("DELETE FROM messages WHERE owner_id=? AND chat_id=? AND msg_id=?",
+                  (owner_id, chat_id, msg_id))
+
+
+async def drop_messages(owner_id: int, chat_id: int, msg_ids: list[int]) -> None:
     for start in range(0, len(msg_ids), 400):
         chunk = msg_ids[start:start + 400]
         placeholders = ",".join("?" * len(chunk))
         await conn().execute(
-            f"DELETE FROM messages WHERE chat_id=? AND msg_id IN ({placeholders})",
-            (chat_id, *chunk))
+            f"DELETE FROM messages WHERE owner_id=? AND chat_id=? "
+            f"AND msg_id IN ({placeholders})", (owner_id, chat_id, *chunk))
     await conn().commit()
-
-
-async def drop_message(chat_id: int, msg_id: int) -> None:
-    await execute("DELETE FROM messages WHERE chat_id=? AND msg_id=?", (chat_id, msg_id))
 
 
 # ----------------------------------------------------------------- deleted ---
 
 async def add_deleted(row: dict) -> int:
     cur = await conn().execute(
-        """INSERT INTO deleted(chat_id,msg_id,user_id,text,media_type,media_ref,
-                               date,deleted_at,file_id,user_name)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (row.get("chat_id"), row.get("msg_id"), row.get("user_id"), row.get("text"),
-         row.get("media_type"), row.get("media_ref"), row.get("date"), now(),
-         row.get("file_id"), row.get("user_name")),
-    )
+        """INSERT INTO deleted(owner_id,chat_id,msg_id,user_id,user_name,text,
+                               media_type,media_ref,file_id,date,deleted_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (row.get("owner_id"), row.get("chat_id"), row.get("msg_id"),
+         row.get("user_id"), row.get("user_name"), row.get("text"),
+         row.get("media_type"), row.get("media_ref"), row.get("file_id"),
+         row.get("date"), now()))
     await conn().commit()
     return cur.lastrowid
 
 
-async def last_deleted(chat_id: int | None, limit: int = 10):
+async def last_deleted(owner_id: int, chat_id: int | None, limit: int = 10):
     if chat_id is None:
         return await fetchall(
-            "SELECT * FROM deleted ORDER BY deleted_at DESC LIMIT ?", (limit,))
+            "SELECT * FROM deleted WHERE owner_id=? ORDER BY deleted_at DESC LIMIT ?",
+            (owner_id, limit))
     return await fetchall(
-        "SELECT * FROM deleted WHERE chat_id=? ORDER BY deleted_at DESC LIMIT ?",
-        (chat_id, limit))
+        "SELECT * FROM deleted WHERE owner_id=? AND chat_id=? "
+        "ORDER BY deleted_at DESC LIMIT ?", (owner_id, chat_id, limit))
 
 
-async def add_edit(chat_id, msg_id, user_id, old_text, new_text) -> None:
+async def add_edit(owner_id: int, chat_id, msg_id, user_id, old_text,
+                   new_text) -> None:
     await execute(
-        "INSERT INTO edits(chat_id,msg_id,user_id,old_text,new_text,edited_at) "
-        "VALUES (?,?,?,?,?,?)",
-        (chat_id, msg_id, user_id, old_text, new_text, now()),
-    )
-
-
-# ------------------------------------------------------------------- mutes ---
-
-async def add_mute(chat_id: int, user_id: int, until: int, reason: str = "") -> None:
-    await execute(
-        """INSERT INTO mutes(chat_id,user_id,until,reason,created_at) VALUES (?,?,?,?,?)
-           ON CONFLICT(chat_id,user_id) DO UPDATE SET until=excluded.until,
-                                                      reason=excluded.reason,
-                                                      created_at=excluded.created_at""",
-        (chat_id, user_id, until, reason, now()),
-    )
-
-
-async def get_mute(chat_id: int, user_id: int):
-    return await fetchone("SELECT * FROM mutes WHERE chat_id=? AND user_id=?",
-                          (chat_id, user_id))
-
-
-async def remove_mute(chat_id: int, user_id: int) -> None:
-    await execute("DELETE FROM mutes WHERE chat_id=? AND user_id=?", (chat_id, user_id))
-
-
-async def all_mutes():
-    return await fetchall("SELECT * FROM mutes")
+        "INSERT INTO edits(owner_id,chat_id,msg_id,user_id,old_text,new_text,"
+        "edited_at) VALUES (?,?,?,?,?,?,?)",
+        (owner_id, chat_id, msg_id, user_id, old_text, new_text, now()))
 
 
 # ------------------------------------------------------------- перехваты ----
 
 async def add_intercepted(row: dict, reason: str = "mute") -> None:
     await execute(
-        """INSERT INTO intercepted(chat_id,msg_id,user_id,user_name,text,
+        """INSERT INTO intercepted(owner_id,chat_id,msg_id,user_id,user_name,text,
                                    media_type,file_id,date,at,reason)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (row.get("chat_id"), row.get("msg_id"), row.get("user_id"),
-         row.get("user_name"), row.get("text"), row.get("media_type"),
-         row.get("file_id"), row.get("date"), now(), reason),
-    )
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (row.get("owner_id"), row.get("chat_id"), row.get("msg_id"),
+         row.get("user_id"), row.get("user_name"), row.get("text"),
+         row.get("media_type"), row.get("file_id"), row.get("date"), now(), reason))
 
 
-async def intercepted(user_id: int | None = None, *, since: int = 0,
+async def intercepted(owner_id: int, user_id: int | None = None, *, since: int = 0,
                       reason: str | None = None, limit: int = 50):
-    where, params = ["at >= ?"], [since]
+    where, params = ["owner_id = ?", "at >= ?"], [owner_id, since]
     if user_id is not None:
         where.append("user_id = ?")
         params.append(user_id)
@@ -371,30 +452,58 @@ async def intercepted(user_id: int | None = None, *, since: int = 0,
         f"ORDER BY at DESC LIMIT ?", params)
 
 
-async def count_intercepted(user_id: int | None = None, *, since: int = 0) -> int:
-    if user_id is None:
-        return await scalar("SELECT COUNT(*) FROM intercepted WHERE at >= ?", (since,))
-    return await scalar(
-        "SELECT COUNT(*) FROM intercepted WHERE user_id=? AND at >= ?",
-        (user_id, since))
+# ------------------------------------------------------------------- mutes ---
+
+async def add_mute(owner_id: int, chat_id: int, user_id: int, until: int,
+                   reason: str = "") -> None:
+    await execute(
+        """INSERT INTO mutes(owner_id,chat_id,user_id,until,reason,created_at)
+           VALUES (?,?,?,?,?,?)
+           ON CONFLICT(owner_id,chat_id,user_id) DO UPDATE SET
+                until=excluded.until, reason=excluded.reason,
+                created_at=excluded.created_at""",
+        (owner_id, chat_id, user_id, until, reason, now()))
+
+
+async def get_mute(owner_id: int, chat_id: int, user_id: int):
+    return await fetchone(
+        "SELECT * FROM mutes WHERE owner_id=? AND chat_id=? AND user_id=?",
+        (owner_id, chat_id, user_id))
+
+
+async def remove_mute(owner_id: int, chat_id: int, user_id: int) -> None:
+    await execute("DELETE FROM mutes WHERE owner_id=? AND chat_id=? AND user_id=?",
+                  (owner_id, chat_id, user_id))
+
+
+async def all_mutes(owner_id: int | None = None):
+    if owner_id is None:
+        return await fetchall("SELECT * FROM mutes")
+    return await fetchall("SELECT * FROM mutes WHERE owner_id=?", (owner_id,))
 
 
 # ------------------------------------------------------------ белый список --
 
-async def allow(user_id: int, name: str) -> None:
-    await execute("INSERT INTO allowlist(user_id,name,added_at) VALUES (?,?,?) "
-                  "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name",
-                  (user_id, name, now()))
+async def allow(owner_id: int, user_id: int, name: str) -> None:
+    await execute("INSERT INTO allowlist(owner_id,user_id,name,added_at) "
+                  "VALUES (?,?,?,?) "
+                  "ON CONFLICT(owner_id,user_id) DO UPDATE SET name=excluded.name",
+                  (owner_id, user_id, name, now()))
 
 
-async def disallow(user_id: int) -> bool:
-    row = await fetchone("SELECT user_id FROM allowlist WHERE user_id=?", (user_id,))
-    await execute("DELETE FROM allowlist WHERE user_id=?", (user_id,))
+async def disallow(owner_id: int, user_id: int) -> bool:
+    row = await fetchone("SELECT user_id FROM allowlist WHERE owner_id=? AND user_id=?",
+                         (owner_id, user_id))
+    await execute("DELETE FROM allowlist WHERE owner_id=? AND user_id=?",
+                  (owner_id, user_id))
     return row is not None
 
 
-async def allowed_users():
-    return await fetchall("SELECT * FROM allowlist ORDER BY added_at")
+async def allowed_users(owner_id: int | None = None):
+    if owner_id is None:
+        return await fetchall("SELECT * FROM allowlist ORDER BY added_at")
+    return await fetchall("SELECT * FROM allowlist WHERE owner_id=? ORDER BY added_at",
+                          (owner_id,))
 
 
 # ---------------------------------------------------------------- поиск -----
@@ -403,19 +512,19 @@ def _escape_like(query: str) -> str:
     return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-async def search_deleted(query: str, limit: int = 20):
-    """Поиск по журналу удалённых и перехваченных."""
+async def search_deleted(owner_id: int, query: str, limit: int = 20):
+    """Поиск по журналу удалённых и перехваченных одного владельца."""
     pattern = f"%{_escape_like(query)}%"
     return await fetchall(
         """SELECT chat_id, user_id, user_name, text, media_type, file_id,
                   date, deleted_at AS at, 'deleted' AS kind
-             FROM deleted   WHERE text LIKE ? ESCAPE '\\'
+             FROM deleted   WHERE owner_id=? AND text LIKE ? ESCAPE '\\'
            UNION ALL
            SELECT chat_id, user_id, user_name, text, media_type, file_id,
                   date, at, 'intercepted' AS kind
-             FROM intercepted WHERE text LIKE ? ESCAPE '\\'
+             FROM intercepted WHERE owner_id=? AND text LIKE ? ESCAPE '\\'
            ORDER BY at DESC LIMIT ?""",
-        (pattern, pattern, limit))
+        (owner_id, pattern, owner_id, pattern, limit))
 
 
 # ---------------------------------------------------------------- business ---
@@ -431,8 +540,7 @@ async def save_business(connection_id: str, user_id: int, user_chat_id: int | No
                 user_chat_id=excluded.user_chat_id,
                 is_enabled=excluded.is_enabled,
                 rights=excluded.rights""",
-        (connection_id, user_id, user_chat_id, int(is_enabled), rights, now()),
-    )
+        (connection_id, user_id, user_chat_id, int(is_enabled), rights, now()))
 
 
 async def all_business():
@@ -446,51 +554,54 @@ async def drop_business(connection_id: str) -> None:
 # ---------------------------------------------------------------- settings ---
 
 DEFAULT_SETTINGS = {
-    "antidelete": None,   # None -> вычисляется по типу чата
+    "antidelete": None,
     "log_edits": None,
     "save_media": None,
     "ignored": 0,
 }
 
 
-async def get_settings(chat_id: int) -> dict:
-    row = await fetchone("SELECT * FROM settings WHERE chat_id=?", (chat_id,))
+async def get_settings(owner_id: int, chat_id: int) -> dict:
+    row = await fetchone("SELECT * FROM settings WHERE owner_id=? AND chat_id=?",
+                         (owner_id, chat_id))
     if row is None:
         return dict(DEFAULT_SETTINGS)
     return {k: row[k] for k in DEFAULT_SETTINGS}
 
 
-async def set_setting(chat_id: int, key: str, value: int) -> None:
+async def set_setting(owner_id: int, chat_id: int, key: str, value: int) -> None:
     if key not in DEFAULT_SETTINGS:
         raise KeyError(key)
     await execute(
-        f"INSERT INTO settings(chat_id,{key}) VALUES (?,?) "
-        f"ON CONFLICT(chat_id) DO UPDATE SET {key}=excluded.{key}",
-        (chat_id, value),
-    )
+        f"INSERT INTO settings(owner_id,chat_id,{key}) VALUES (?,?,?) "
+        f"ON CONFLICT(owner_id,chat_id) DO UPDATE SET {key}=excluded.{key}",
+        (owner_id, chat_id, value))
 
 
 # ------------------------------------------------------------------- notes ---
 
-async def save_note(chat_id: int, name: str, content: str) -> None:
+async def save_note(owner_id: int, chat_id: int, name: str, content: str) -> None:
     await execute(
-        "INSERT INTO notes(chat_id,name,content) VALUES (?,?,?) "
-        "ON CONFLICT(chat_id,name) DO UPDATE SET content=excluded.content",
-        (chat_id, name.lower(), content),
-    )
+        "INSERT INTO notes(owner_id,chat_id,name,content) VALUES (?,?,?,?) "
+        "ON CONFLICT(owner_id,chat_id,name) DO UPDATE SET content=excluded.content",
+        (owner_id, chat_id, name.lower(), content))
 
 
-async def get_note(chat_id: int, name: str):
-    return await fetchone("SELECT content FROM notes WHERE chat_id=? AND name=?",
-                          (chat_id, name.lower()))
+async def get_note(owner_id: int, chat_id: int, name: str):
+    return await fetchone(
+        "SELECT content FROM notes WHERE owner_id=? AND chat_id=? AND name=?",
+        (owner_id, chat_id, name.lower()))
 
 
-async def list_notes(chat_id: int):
-    return await fetchall("SELECT name FROM notes WHERE chat_id=? ORDER BY name", (chat_id,))
+async def list_notes(owner_id: int, chat_id: int):
+    return await fetchall(
+        "SELECT name FROM notes WHERE owner_id=? AND chat_id=? ORDER BY name",
+        (owner_id, chat_id))
 
 
-async def drop_note(chat_id: int, name: str) -> None:
-    await execute("DELETE FROM notes WHERE chat_id=? AND name=?", (chat_id, name.lower()))
+async def drop_note(owner_id: int, chat_id: int, name: str) -> None:
+    await execute("DELETE FROM notes WHERE owner_id=? AND chat_id=? AND name=?",
+                  (owner_id, chat_id, name.lower()))
 
 
 # ---------------------------------------------------------------------- kv ---
@@ -521,15 +632,23 @@ async def cleanup() -> tuple[int, int]:
     return a, b
 
 
-async def stats() -> dict:
-    return {
-        "cached": await scalar("SELECT COUNT(*) FROM messages"),
-        "deleted": await scalar("SELECT COUNT(*) FROM deleted"),
-        "edits": await scalar("SELECT COUNT(*) FROM edits"),
-        "mutes": await scalar("SELECT COUNT(*) FROM mutes"),
-        "notes": await scalar("SELECT COUNT(*) FROM notes"),
-        "business": await scalar("SELECT COUNT(*) FROM business WHERE is_enabled=1"),
-        "intercepted": await scalar("SELECT COUNT(*) FROM intercepted"),
-        "allowed": await scalar("SELECT COUNT(*) FROM allowlist"),
-        "size": config.DB_PATH.stat().st_size if config.DB_PATH.exists() else 0,
-    }
+async def stats(owner_id: int | None = None) -> dict:
+    def scope(table: str) -> tuple[str, tuple]:
+        if owner_id is None:
+            return f"SELECT COUNT(*) FROM {table}", ()
+        return f"SELECT COUNT(*) FROM {table} WHERE owner_id=?", (owner_id,)
+
+    counts = {}
+    for key, table in (("cached", "messages"), ("deleted", "deleted"),
+                       ("edits", "edits"), ("mutes", "mutes"),
+                       ("notes", "notes"), ("intercepted", "intercepted"),
+                       ("allowed", "allowlist")):
+        sql, params = scope(table)
+        counts[key] = await scalar(sql, params)
+    counts["business"] = await scalar(
+        "SELECT COUNT(*) FROM business WHERE is_enabled=1"
+        + (" AND user_id=?" if owner_id is not None else ""),
+        (owner_id,) if owner_id is not None else ())
+    counts["users"] = await scalar("SELECT COUNT(*) FROM users WHERE status='approved'")
+    counts["size"] = config.DB_PATH.stat().st_size if config.DB_PATH.exists() else 0
+    return counts

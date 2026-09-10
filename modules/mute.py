@@ -55,7 +55,7 @@ async def _do_mute(ctx: Ctx, *, global_: bool) -> None:
     until = int(time.time()) + seconds if seconds else 0
 
     scope = 0 if global_ else ctx.chat_id
-    await state.mute_user(scope, user_id, until, reason)
+    await state.mute_user(state.userbot_owner(), scope, user_id, until, reason)
 
     is_peer = ctx.is_private and user_id == ctx.chat_id
     who = fmt.mention(entity, user_id)
@@ -86,9 +86,10 @@ async def _do_unmute(ctx: Ctx, *, global_: bool) -> None:
         return
 
     scope = 0 if global_ else ctx.chat_id
-    existed = await state.unmute_user(scope, user_id)
+    owner = state.userbot_owner()
+    existed = await state.unmute_user(owner, scope, user_id)
     if not existed and not global_:
-        existed = await state.unmute_user(0, user_id)   # вдруг был глобальный
+        existed = await state.unmute_user(owner, 0, user_id)   # вдруг глобальный
     if not existed:
         await ctx.fail("Этот пользователь и не был замучен.")
         return
@@ -112,7 +113,7 @@ async def cmd_ungmute(ctx: Ctx) -> None:
 
 @command("mutelist", args="", cat=CAT, desc="список активных мутов", aliases=["mutes"])
 async def cmd_mutelist(ctx: Ctx) -> None:
-    rows = await db.all_mutes()
+    rows = await db.all_mutes(state.userbot_owner())
     if not rows:
         await ctx.done("🔇 Список мутов пуст.")
         return
@@ -139,7 +140,7 @@ async def cmd_mutelist(ctx: Ctx) -> None:
 
 # --------------------------------------------------------------- перехват ---
 
-async def _log_intercepted(event, media_ref: int | None) -> None:
+async def _log_intercepted(owner: int, event, media_ref: int | None) -> None:
     if not config.MUTE_LOG:
         return
     try:
@@ -153,14 +154,15 @@ async def _log_intercepted(event, media_ref: int | None) -> None:
     if kind:
         head += f"\n{mediastore.KIND_ICON.get(kind, '📎')} {kind}"
     text = head + (f"\n\n{body}" if body else "")
-    await reporter.send_report(text, media_ref=media_ref)
+    await reporter.send_report(owner, text, media_ref=media_ref)
 
 
 async def _enforce(event) -> None:
     """Удаляет сообщение замученного у всех — до того, как его успеют прочитать."""
     if event.out or not event.sender_id:
         return
-    if not await state.is_muted(event.chat_id, event.sender_id):
+    owner = state.userbot_owner()
+    if not await state.is_muted(owner, event.chat_id, event.sender_id):
         return
 
     message = event.message
@@ -171,10 +173,11 @@ async def _enforce(event) -> None:
     try:
         await event.client.delete_messages(await event.get_input_chat(),
                                            [message.id], revoke=True)
-        state.mark_own_deletion(event.chat_id, message.id,
+        state.mark_own_deletion(owner, event.chat_id, message.id,
                                 private=bool(event.is_private))
     except (ChatAdminRequiredError, MessageDeleteForbiddenError):
         await reporter.send_report(
+            owner,
             f"⚠️ Не хватает прав удалять сообщения в чате `{event.chat_id}` — "
             f"мут там не работает.")
         return
@@ -188,7 +191,7 @@ async def _enforce(event) -> None:
             media_ref = await snap_task
         except Exception:
             media_ref = None
-    await _log_intercepted(event, media_ref)
+    await _log_intercepted(owner, event, media_ref)
 
 
 def setup(client) -> None:

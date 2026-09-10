@@ -73,7 +73,6 @@ async def start_userbot():
 
     state.client = client
     state.me = await client.get_me()
-    state.owner_id = state.owner_id or state.me.id
     log.info("юзербот: вошли как %s (id %s)", fmt.name_of(state.me), state.me.id)
 
     try:
@@ -109,9 +108,6 @@ async def connect_bot():
 async def configure_bot(api) -> None:
     """Поднимает подключения и меню — уже после того, как база готова."""
     await business.load_connections()
-    if config.OWNER_ID:
-        state.owner_id = config.OWNER_ID
-        state.owner_chat_id = state.owner_chat_id or config.OWNER_ID
     await commands.publish_menu(api)
     if not state.business:
         log.info("бизнес-подключений нет: они подхватятся с первого же события "
@@ -199,12 +195,10 @@ async def run() -> None:
     await restore_database(client, api)
 
     await db.init()
+    await state.load_users()
     await state.load_mutes()
-    await state.load_dnd()
     await state.load_allowlist()
-    log.info("мутов загружено: %s, белый список: %s, «не беспокоить»: %s",
-             len(state.mutes), len(state.allowlist),
-             "включён" if state.dnd_active() else "выключен")
+    log.info("пользователей: %s, мутов: %s", len(state.owners()), len(state.mutes))
 
     if api is not None:
         await configure_bot(api)
@@ -221,11 +215,13 @@ async def run() -> None:
     await announce_restart()
     log.info("режимы: %s", describe_modes())
     await reporter.send_report(
+        state.admin_id() or state.userbot_owner(),
         f"🛡 **Guard запущен**\n"
         f"{describe_modes()}\n"
         f"📡 транспорт: {'вебхук' if config.use_webhook() else 'long polling'}\n"
         f"⌨️ префикс `{config.PREFIX}`\n"
-        f"🔇 мутов восстановлено: {len(state.mutes)}"
+        f"🔇 мутов восстановлено: {len(state.mutes)}\n"
+        f"👥 пользователей: {len(state.owners())}"
     )
 
     try:

@@ -7,7 +7,7 @@ import config
 import db
 from bot import business
 from core import state
-from tests.fakes import ALL_RIGHTS, FakeBotAPI, business_message
+from tests.fakes import ALL_RIGHTS, FakeBotAPI, approve, business_message
 
 OWNER = 111
 PEER = 777
@@ -24,7 +24,7 @@ CONNECTION = {
 
 @pytest.fixture(autouse=True)
 def env():
-    from modules.antidelete import invalidate_all
+    from core.chatprefs import invalidate_all
 
     config.DB_PATH.unlink(missing_ok=True)
     asyncio.run(db.init())
@@ -32,18 +32,20 @@ def env():
     config.PURGE_DEBOUNCE_SEC = 0
     business._pending.clear()
     business._relearn_attempt.clear()
-    business._relearn_announced = False
+    business._relearn_announced.clear()
     state.business.clear()
     state.mutes.clear()
     state.forget_own_deletions()
-    asyncio.run(state.load_dnd())
-    asyncio.run(state.load_allowlist())
+    state.users.clear()
+    state.allowlist.clear()
+    config.OWNER_ID = OWNER        # владелец бота — он же администратор
+    approve(OWNER, OWNER)
     state.client = None
     state.log_entity = None
-    state.owner_id = state.owner_chat_id = 0
     state.api = FakeBotAPI()
     state.api.connection = dict(CONNECTION)
     yield
+    config.OWNER_ID = 0
     asyncio.run(db.close())
     state.api = None
     state.business.clear()
@@ -60,14 +62,13 @@ def test_first_message_restores_a_forgotten_connection():
 
     assert state.api.connection_lookups == 1
     assert state.business[BIZ]["user_id"] == OWNER
-    assert state.owner_id == OWNER and state.owner_chat_id == OWNER
     assert asyncio.run(db.all_business()), "связка сохранена в базу"
 
 
 def test_restored_connection_keeps_working():
     incoming(text="привет", message_id=1)
     state.api.sent.clear()
-    asyncio.run(state.mute_user(PEER, PEER, 0))
+    asyncio.run(state.mute_user(OWNER, PEER, PEER, 0))
     incoming(text="спам", message_id=2)
     assert state.api.deleted == [(BIZ, [2])], "мут работает сразу после восстановления"
 
@@ -101,11 +102,11 @@ def test_failed_lookup_is_not_hammered():
 def test_unknown_owner_never_deletes_anything():
     """Без владельца нельзя отличить свои сообщения от чужих — удалять опасно."""
     state.api.connection = None
-    asyncio.run(state.set_dnd())
+    asyncio.run(state.set_dnd(OWNER))
     incoming(text="важное", message_id=1)
 
     assert state.api.deleted == [], "вслепую ничего не удаляем"
-    assert asyncio.run(db.get_message(PEER, 1)) is not None, "но сообщение сохранили"
+    assert asyncio.run(db.get_message(0, PEER, 1)) is None, "владелец неизвестен"
 
 
 def test_deletion_event_also_restores_the_connection():

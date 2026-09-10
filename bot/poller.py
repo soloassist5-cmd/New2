@@ -12,6 +12,7 @@ log = logging.getLogger("poller")
 # Business-апдейты приходят, только если явно запросить их здесь.
 ALLOWED_UPDATES = [
     "message",
+    "callback_query",
     "business_connection",
     "business_message",
     "edited_business_message",
@@ -25,7 +26,7 @@ BACKOFF_MAX = 60
 
 async def dispatch(api, update: dict) -> None:
     if "business_connection" in update:
-        await business.on_business_connection(update["business_connection"])
+        await business.on_business_connection(api, update["business_connection"])
     elif "business_message" in update:
         await business.on_business_message(api, update["business_message"])
     elif "edited_business_message" in update:
@@ -33,6 +34,8 @@ async def dispatch(api, update: dict) -> None:
     elif "deleted_business_messages" in update:
         await business.on_deleted_business_messages(
             api, update["deleted_business_messages"])
+    elif "callback_query" in update:
+        await commands.handle_callback(api, update["callback_query"])
     elif "message" in update:
         await commands.handle(api, update["message"])
 

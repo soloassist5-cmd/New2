@@ -109,14 +109,14 @@ def dispatch(text, **kwargs):
 def test_mute_in_private_chat_edits_own_message():
     msg = dispatch(".mute")
     assert msg.frames[-1] == "🔇 **Вы были замучены на неопределённый срок.**"
-    assert (CHAT, PEER) in state.mutes
+    assert (ME, CHAT, PEER) in state.mutes
 
 
 def test_mute_with_duration_and_reason():
     msg = dispatch(".mute 2h капслок")
     assert "на 2 часа" in msg.frames[-1]
     assert "Причина: капслок" in msg.frames[-1]
-    assert state.mutes[(CHAT, PEER)] > 0, "срок должен быть записан"
+    assert state.mutes[(ME, CHAT, PEER)] > 0, "срок должен быть записан"
 
 
 def test_quiet_flag_skips_animation():
@@ -128,14 +128,14 @@ def test_mute_survives_restart_via_db():
     dispatch(".mute 1d")
     state.mutes.clear()
     asyncio.run(state.load_mutes())
-    assert asyncio.run(state.is_muted(CHAT, PEER))
+    assert asyncio.run(state.is_muted(ME, CHAT, PEER))
 
 
 def test_unmute_restores_speech():
     dispatch(".mute")
     msg = dispatch(".unmute")
     assert msg.frames[-1] == "🔊 **С вас снят мут. Можете писать.**"
-    assert not asyncio.run(state.is_muted(CHAT, PEER))
+    assert not asyncio.run(state.is_muted(ME, CHAT, PEER))
 
 
 def test_unmute_without_mute_reports_error():
@@ -149,8 +149,8 @@ def test_muted_message_is_deleted_for_everyone():
     asyncio.run(mute._enforce(incoming))
     assert state.client.deleted == [(CHAT, (42,), True)], "удаление должно быть revoke=True"
     # Своё удаление не должно попасть в журнал как «удалено собеседником».
-    assert state.was_own_deletion(CHAT, 42)
-    assert state.was_own_deletion(None, 42)
+    assert state.was_own_deletion(ME, CHAT, 42)
+    assert state.was_own_deletion(ME, None, 42)
 
 
 def test_unmuted_message_is_left_alone():
@@ -184,7 +184,7 @@ def test_gmute_applies_everywhere():
 
 def test_expired_mute_stops_deleting():
     dispatch(".mute 1s")
-    state.mutes[(CHAT, PEER)] = db.now() - 1        # промотали время вперёд
+    state.mutes[(ME, CHAT, PEER)] = db.now() - 1    # промотали время вперёд
     incoming = FakeEvent("привет", out=False, msg_id=47)
     asyncio.run(mute._enforce(incoming))
     assert state.client.deleted == []
@@ -202,7 +202,7 @@ def test_mute_by_reply_in_group_names_the_target():
     msg = dispatch(".mute 10m", chat_id=GROUP, is_private=False, reply_to=555)
     assert "Вы были замучены" not in msg.frames[-1]
     assert "замучен(а) на 10 минут" in msg.frames[-1]
-    assert (GROUP, 555) in state.mutes
+    assert (ME, GROUP, 555) in state.mutes
 
 
 def test_self_mute_is_refused():

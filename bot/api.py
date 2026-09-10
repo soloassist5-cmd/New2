@@ -107,7 +107,8 @@ class BotAPI:
 
     async def send_message(self, chat_id: int, text: str, *,
                            business_connection_id: str | None = None,
-                           reply_to: int | None = None) -> dict:
+                           reply_to: int | None = None,
+                           reply_markup: dict | None = None) -> dict:
         return await self.call(
             "sendMessage", chat_id=chat_id,
             text=markup.trim(markup.to_html(text), TEXT_LIMIT),
@@ -115,15 +116,24 @@ class BotAPI:
             link_preview_options={"is_disabled": True},
             business_connection_id=business_connection_id,
             reply_parameters={"message_id": reply_to} if reply_to else None,
+            reply_markup=reply_markup,
         )
 
+    async def answer_callback(self, callback_query_id: str, text: str = "",
+                              show_alert: bool = False) -> bool:
+        return await self.call("answerCallbackQuery",
+                               callback_query_id=callback_query_id,
+                               text=text or None, show_alert=show_alert or None)
+
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, *,
-                                business_connection_id: str | None = None) -> Any:
+                                business_connection_id: str | None = None,
+                                reply_markup: dict | None = None) -> Any:
         return await self.call(
             "editMessageText", chat_id=chat_id, message_id=message_id,
             text=markup.trim(markup.to_html(text), TEXT_LIMIT), parse_mode="HTML",
             link_preview_options={"is_disabled": True},
             business_connection_id=business_connection_id,
+            reply_markup=reply_markup,
         )
 
     async def send_media(self, chat_id: int, file_id: str, media_type: str | None, *,
