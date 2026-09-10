@@ -236,3 +236,64 @@ def test_transcript_builder_stats():
                      "first": 100, "last": 200}
     text = payload.decode("utf-8")
     assert "привет" in text and "<фото>" in text and "Вы" in text
+
+
+# ------------------------------------------- настоящее окно ожидания -------
+# Все тесты выше выставляют PURGE_DEBOUNCE_SEC = 0 и обходят задачу ожидания
+# стороной. Именно в ней жила ошибка: flush() отменял задачу, из которой сам
+# же и вызывался, — CancelledError прилетал в него на первом await, и отчёт
+# не уходил вообще. Эти тесты идут по боевому пути, с реальной паузой.
+
+WINDOW = 0.05
+
+
+def run_with_window(fill, *updates, extra_wait=0.2):
+    async def scenario():
+        config.PURGE_DEBOUNCE_SEC = WINDOW
+        await fill()
+        state.api.sent.clear()
+        state.api.files.clear()
+        for ids in updates:
+            await business.on_deleted_business_messages(
+                state.api, deleted_update(ids))
+        await asyncio.sleep(WINDOW + extra_wait)
+    asyncio.run(scenario())
+    return state.api
+
+
+async def fill_chat(count, start=1):
+    for offset in range(count):
+        await business.on_business_message(state.api, business_message(
+            f"сообщение {start + offset}", message_id=start + offset,
+            date=1700000000 + offset))
+
+
+def test_single_deletion_survives_the_waiting_window():
+    api = run_with_window(lambda: fill_chat(1), [1])
+    assert sum("Удалённое сообщение" in text for text in api.texts) == 1
+    assert len(asyncio.run(db.last_deleted(OWNER, PEER, 10))) == 1
+
+
+def test_mass_deletion_survives_the_waiting_window():
+    api = run_with_window(lambda: fill_chat(12), range(1, 13))
+    assert len(api.files) == 1
+    assert len(asyncio.run(db.last_deleted(OWNER, PEER, 100))) == 12
+
+
+def test_two_updates_inside_the_window_produce_one_report():
+    api = run_with_window(lambda: fill_chat(12), range(1, 7), range(7, 13))
+    assert len(api.files) == 1
+    assert "**12**" in api.captions[0]
+
+
+def test_the_waiting_task_finishes_cleanly():
+    """Задача ожидания не должна отменять сама себя."""
+    async def scenario():
+        config.PURGE_DEBOUNCE_SEC = WINDOW
+        await fill_chat(1)
+        await business.on_deleted_business_messages(state.api, deleted_update([1]))
+        task = business._pending[(OWNER, PEER)].task
+        await asyncio.sleep(WINDOW + 0.2)
+        assert task.done() and not task.cancelled(), "оборвалась на полпути"
+        assert business._pending == {}, "пачка разобрана и убрана"
+    asyncio.run(scenario())

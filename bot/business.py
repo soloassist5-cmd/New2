@@ -387,8 +387,11 @@ async def flush(key: tuple[int, int]) -> None:
     batch = _pending.pop(key, None)
     if batch is None:
         return
-    if batch.task is not None and not batch.task.done():
-        batch.task.cancel()
+    # Сюда приходят и из задачи ожидания: отменить её отсюда — значит бросить
+    # CancelledError в самого себя и молча оборвать разбор на первом же await.
+    task = batch.task
+    if task is not None and task is not asyncio.current_task() and not task.done():
+        task.cancel()
 
     owner_id, chat_id = key
     ids = list(dict.fromkeys(batch.ids))
