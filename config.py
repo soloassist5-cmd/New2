@@ -83,6 +83,8 @@ DND_DEFAULT_TEXT = (
 )
 DND_TEXT: str = (os.getenv("DND_TEXT", "") or DND_DEFAULT_TEXT).strip()
 DND_REPLY_COOLDOWN: int = _int("DND_REPLY_COOLDOWN", 3600)
+# Как часто напоминать владельцу, что режим всё ещё включён и что-то съедает.
+DND_NOTICE_EVERY: int = _int("DND_NOTICE_EVERY", 6 * 3600)
 
 # Массовое удаление (очистка переписки) — одним файлом вместо сотни карточек.
 PURGE_THRESHOLD: int = _int("PURGE_THRESHOLD", 5)

@@ -72,6 +72,7 @@ HELP = (
     "**Проще всего — /menu:** там видно всё состояние, и любой режим "
     "выключается той же кнопкой, которой включён.\n\n"
     "**Командами:**\n"
+    "/why — почему ничего не приходит\n"
     "/gmute — «не беспокоить»: удалять сообщения всех подряд\n"
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
@@ -96,6 +97,7 @@ ADMIN_HELP = (
 
 MENU = (
     ("menu", "панель управления: всё состояние и кнопки"),
+    ("why", "почему ничего не приходит"),
     ("gmute", "не беспокоить: удалять сообщения всех"),
     ("ungmute", "выключить «не беспокоить»"),
     ("intercepted", "что перехвачено"),
@@ -155,6 +157,13 @@ async def cmd_menu(api, message: dict, _args: str) -> None:
     """Один экран, с которого видно всё состояние и всё выключается кнопкой."""
     owner_id = (message.get("from") or {}).get("id")
     text, keyboard = await ui.render(owner_id, "home")
+    await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
+
+
+async def cmd_why(api, message: dict, _args: str) -> None:
+    """«Почему ничего не приходит» — бот проверяет себя и отвечает сам."""
+    owner_id = (message.get("from") or {}).get("id")
+    text, keyboard = await ui.render(owner_id, "why")
     await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
 
 
@@ -421,6 +430,8 @@ HANDLERS = {
     "start": cmd_start,
     "menu": cmd_menu,
     "settings": cmd_menu,
+    "why": cmd_why,
+    "debug": cmd_why,
     "connect": cmd_connect,
     "help": cmd_help,
     "status": cmd_status,

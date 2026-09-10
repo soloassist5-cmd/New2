@@ -251,3 +251,45 @@ def test_edit_without_text_change_is_silent():
     asyncio.run(business.on_edited_business_message(
         state.api, business_message(text="одно и то же", message_id=71)))
     assert len(api.sent) == before
+
+
+def test_do_not_disturb_tells_the_owner_it_is_working():
+    """Молчаливый режим выглядит как поломка: сообщений нет, отчётов нет."""
+    api = connect()
+    asyncio.run(state.set_dnd(OWNER))
+    state.dnd_notified.clear()
+    api.sent.clear()
+
+    incoming(text="привет", message_id=80)
+
+    notices = [text for text in api.texts_to(OWNER_CHAT)
+               if "Не беспокоить» работает" in text]
+    assert len(notices) == 1
+    assert "Перехвачено с момента включения" in notices[0]
+    assert any(m and "dnd:off" in str(m) for m in api.markups), "кнопка выключения"
+
+
+def test_the_notice_does_not_repeat_on_every_message():
+    api = connect()
+    asyncio.run(state.set_dnd(OWNER))
+    state.dnd_notified.clear()
+    api.sent.clear()
+
+    for msg_id in range(81, 86):
+        incoming(text="спам", message_id=msg_id)
+
+    notices = [t for t in api.texts_to(OWNER_CHAT) if "Не беспокоить» работает" in t]
+    assert len(notices) == 1, "напоминание не должно превращаться в спам"
+
+
+def test_the_notice_comes_again_after_re_enabling():
+    api = connect()
+    asyncio.run(state.set_dnd(OWNER))
+    state.dnd_notified.clear()
+    incoming(text="раз", message_id=90)
+    asyncio.run(state.clear_dnd(OWNER))
+    asyncio.run(state.set_dnd(OWNER))
+    api.sent.clear()
+
+    incoming(text="два", message_id=91)
+    assert any("Не беспокоить» работает" in t for t in api.texts_to(OWNER_CHAT))

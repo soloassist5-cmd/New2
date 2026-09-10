@@ -52,8 +52,9 @@ async def home(owner_id: int) -> tuple[str, dict]:
 
     keyboard = markup(
         [button(f"🌙 Не беспокоить: {'ВКЛ' if dnd else 'выкл'}", "m:dnd")],
-        [button("🗑 Журнал", "m:log:0"), button("🔇 Муты", "m:mutes")],
-        [button("🙈 Чаты", "m:chats"), button("✅ Белый список", "m:allow")],
+        [button("🗑 Журнал", "m:log:0"), button("🔇 Перехвачено", "m:muted:0")],
+        [button("🔇 Муты", "m:mutes"), button("✅ Белый список", "m:allow")],
+        [button("🙈 Чаты", "m:chats"), button("🩺 Почему тихо?", "m:why")],
         [button("❓ Что тут как работает", "m:help")],
     )
     return "\n".join(lines), keyboard
@@ -182,6 +183,105 @@ async def chats(owner_id: int) -> tuple[str, dict]:
     return "\n".join(lines), markup(*buttons, [BACK])
 
 
+# ------------------------------------------------- перехваченное ---------
+
+async def muted(owner_id: int, offset: int = 0) -> tuple[str, dict]:
+    rows = await db.intercepted(owner_id, limit=offset + PAGE + 1)
+    page = rows[offset:offset + PAGE]
+    if not rows:
+        return ("🔇 **Перехваченного нет.**\n\nСюда попадает то, что удалили "
+                "мут и режим «Не беспокоить».", markup([BACK]))
+
+    reasons = {"mute": "🔇", "dnd": "🌙"}
+    lines = [f"🔇 **Перехвачено** ({offset + 1}–{offset + len(page)})", "",
+             "Это сообщения, которые бот удалил за вас. Отправители их больше "
+             "не видят, а вы — видите.", ""]
+    for row in page:
+        preview = fmt.truncate(row["text"] or "", 140) or (
+            f"_{row['media_type']}_" if row["media_type"] else "_пусто_")
+        lines.append(f"{reasons.get(row['reason'], '•')} `{fmt.ts(row['at'])}` "
+                     f"**{row['user_name'] or '—'}**\n  {preview}")
+
+    nav = []
+    if offset:
+        nav.append(button("⬅️", f"m:muted:{max(offset - PAGE, 0)}"))
+    if len(rows) > offset + PAGE:
+        nav.append(button("➡️ Ещё", f"m:muted:{offset + PAGE}"))
+    return fmt.truncate("\n".join(lines), 3500), markup(nav, [BACK])
+
+
+# ------------------------------------------------------- самодиагностика --
+
+async def why(owner_id: int) -> tuple[str, dict]:
+    """Отвечает на «почему я ничего не получаю» — бот проверяет себя сам."""
+    lines = ["🩺 **Почему может быть тихо**", ""]
+    blockers: list[dict] = []
+
+    connection_id = state.business_of(owner_id)
+    if not connection_id:
+        lines.append("🔴 **Бот не подключён к личным чатам.**\n"
+                     "   Это главная причина: без подключения он не видит ничего.\n"
+                     "   Инструкция — /connect. Если подключение есть, напишите "
+                     "что-нибудь в любой переписке, я его подхвачу.")
+        blockers.append(button("🔌 Как подключить", "m:help"))
+    else:
+        rights = state.rights_of(connection_id)
+        lines.append("🟢 Подключение к личным чатам есть.")
+        if not rights.get("can_read_messages"):
+            lines.append("🔴 **Нет права читать сообщения** — без него бот слеп.\n"
+                         "   Настройки → Telegram для бизнеса → Чат-боты → права.")
+        if not rights.get("can_delete_all_messages"):
+            lines.append("🟡 Нет права удалять сообщения собеседника: "
+                         "`.mute` и «Не беспокоить» работать не будут.")
+
+    if state.dnd_active(owner_id):
+        since = state.dnd_since(owner_id)
+        total = await db.count_intercepted(owner_id, since=since)
+        spent = ("только что" if time.time() - since < 60
+                 else f"уже {fmt.uptime(time.time() - since)}")
+        lines.append(f"\n🔴 **Включён режим «Не беспокоить»** ({spent}).\n"
+                     f"   Входящие удаляются сразу, поэтому отчётов об удалении "
+                     f"нет — удалять уже нечего. Перехвачено: **{total}**, "
+                     f"всё сохранено.")
+        blockers.append(button("☀️ Выключить", "dnd:off"))
+
+    ignored = [row for row in await db.tuned_chats(owner_id) if row["ignored"]]
+    if ignored:
+        names = ", ".join(row["title"] or str(row["chat_id"]) for row in ignored[:5])
+        lines.append(f"\n🔴 **Чатов в игноре: {len(ignored)}** ({names}).\n"
+                     f"   В них бот ничего не сохраняет и не присылает.")
+        blockers.append(button("🙈 Вернуть чаты", "m:chats"))
+
+    silent = [row for row in await db.tuned_chats(owner_id)
+              if not row["ignored"] and row["antidelete"] == 0]
+    if silent:
+        lines.append(f"\n🟡 Антиудаление выключено в чатах: {len(silent)}.")
+        blockers.append(button("⚙️ Настройки чатов", "m:chats"))
+
+    stats = await db.activity(owner_id)
+    lines.append("")
+    if stats["cached"]:
+        word = fmt.plural(stats["cached"],
+                          ("сообщением", "сообщениями", "сообщениями"))
+        lines.append(f"🗂 Слежу за **{stats['cached']}** {word} "
+                     f"(последнее — {fmt.ts(stats['last_seen'])}).")
+    elif stats["last_intercept"]:
+        lines.append("🗂 В кэше пусто, и это следствие: входящие сразу "
+                     "перехватываются, до кэша не доходя.")
+    else:
+        lines.append("🗂 В кэше пусто: с момента запуска в ваших чатах ещё никто "
+                     "не писал. Бот запоминает только те сообщения, что видел "
+                     "сам, — то, что было до подключения, ему недоступно.")
+    if stats["last_report"]:
+        lines.append(f"🗑 Последний отчёт об удалении: {fmt.ts(stats['last_report'])}.")
+
+    if not blockers:
+        lines.append("\n✅ **Помех не нашёл.** Всё включено и ждёт. Отчёт придёт, "
+                     "когда собеседник удалит сообщение, которое бот успел "
+                     "увидеть.")
+    return "\n".join(lines), markup(*[[b] for b in blockers], [BACK])
+
+
 # ------------------------------------------------------------ справка -----
 
 HELP_TEXT = (
@@ -210,6 +310,7 @@ async def help_screen(_owner_id: int) -> tuple[str, dict]:
 
 SCREENS = {
     "home": home,
+    "why": why,
     "dnd": dnd,
     "mutes": mutes,
     "allow": allow,
@@ -221,6 +322,8 @@ SCREENS = {
 async def render(owner_id: int, name: str, arg: str = "") -> tuple[str, dict]:
     if name == "log":
         return await log(owner_id, int(arg) if arg.isdigit() else 0)
+    if name == "muted":
+        return await muted(owner_id, int(arg) if arg.isdigit() else 0)
     builder = SCREENS.get(name, home)
     return await builder(owner_id)
 

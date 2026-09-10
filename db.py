@@ -469,6 +469,12 @@ async def intercepted(owner_id: int, user_id: int | None = None, *, since: int =
 
 # ------------------------------------------------------------------- mutes ---
 
+async def count_intercepted(owner_id: int, *, since: int = 0) -> int:
+    return await scalar(
+        "SELECT COUNT(*) FROM intercepted WHERE owner_id=? AND at >= ?",
+        (owner_id, since))
+
+
 async def add_mute(owner_id: int, chat_id: int, user_id: int, until: int,
                    reason: str = "") -> None:
     await execute(
@@ -593,6 +599,20 @@ async def set_setting(owner_id: int, chat_id: int, key: str, value: int,
         f"ON CONFLICT(owner_id,chat_id) DO UPDATE SET {key}=excluded.{key}, "
         f"title=COALESCE(excluded.title, settings.title)",
         (owner_id, chat_id, value, title))
+
+
+async def activity(owner_id: int) -> dict:
+    """Когда бот в последний раз что-то видел и о чём-то сообщал."""
+    return {
+        "cached": await scalar(
+            "SELECT COUNT(*) FROM messages WHERE owner_id=?", (owner_id,)),
+        "last_seen": await scalar(
+            "SELECT MAX(date) FROM messages WHERE owner_id=?", (owner_id,), None),
+        "last_report": await scalar(
+            "SELECT MAX(deleted_at) FROM deleted WHERE owner_id=?", (owner_id,), None),
+        "last_intercept": await scalar(
+            "SELECT MAX(at) FROM intercepted WHERE owner_id=?", (owner_id,), None),
+    }
 
 
 async def name_of(owner_id: int, user_id: int) -> str | None:

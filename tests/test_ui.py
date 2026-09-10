@@ -222,3 +222,64 @@ def test_help_screen_separates_the_three_modes():
     text = state.api.edits[-1][2]
     assert "Мут" in text and "Не беспокоить" in text and "Игнор чата" in text
     assert "мут удаляет чужие сообщения" in text
+
+
+# --------------------------------------------------------- самодиагностика --
+# «Почему бот молчит» — вопрос, на который он должен отвечать сам.
+
+def test_why_finds_nothing_when_all_is_well():
+    press("m:why")
+    text = state.api.edits[-1][2]
+    assert "Помех не нашёл" in text
+    assert screen_buttons(state.api) == ["m:home"], "чинить нечего"
+
+
+def test_why_names_do_not_disturb_as_the_reason():
+    asyncio.run(state.set_dnd(ANNA))
+    press("m:why")
+    text = state.api.edits[-1][2]
+    assert "Не беспокоить" in text and "🔴" in text
+    assert "удалять уже нечего" in text, "объясняет, почему нет отчётов об удалении"
+    assert "dnd:off" in screen_buttons(state.api), "и сразу даёт выключить"
+
+
+def test_why_names_ignored_chats():
+    asyncio.run(chatprefs.toggle(ANNA, PEER, "ignored", True, title="Вася"))
+    press("m:why")
+    text = state.api.edits[-1][2]
+    assert "игноре" in text and "Вася" in text
+    assert "m:chats" in screen_buttons(state.api)
+
+
+def test_why_notices_a_missing_connection():
+    state.business.clear()
+    press("m:why")
+    assert "не подключён" in state.api.edits[-1][2].lower()
+
+
+def test_why_warns_about_missing_rights():
+    state.business[BIZ]["rights"] = {"can_read_messages": False, "can_reply": True}
+    press("m:why")
+    assert "читать сообщения" in state.api.edits[-1][2]
+
+
+def test_why_lists_every_reason_at_once():
+    asyncio.run(state.set_dnd(ANNA))
+    asyncio.run(chatprefs.toggle(ANNA, PEER, "ignored", True, title="Вася"))
+    press("m:why")
+    buttons_shown = screen_buttons(state.api)
+    assert "dnd:off" in buttons_shown and "m:chats" in buttons_shown
+
+
+def test_intercepted_screen_lists_and_paginates():
+    async def fill():
+        for i in range(12):
+            await db.add_intercepted({"owner_id": ANNA, "chat_id": PEER, "msg_id": i,
+                                      "user_id": PEER, "user_name": "Вася",
+                                      "text": f"перехват {i}", "media_type": None,
+                                      "file_id": None, "date": 1700000000 + i}, "dnd")
+    asyncio.run(fill())
+
+    press("m:muted:0")
+    assert "Перехвачено" in state.api.edits[-1][2]
+    assert "m:muted:8" in screen_buttons(state.api)

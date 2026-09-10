@@ -235,6 +235,27 @@ async def _intercept(api, owner_id: int, message: dict, connection_id: str, *,
     return True
 
 
+async def _dnd_notice(owner_id: int, who: str) -> None:
+    """Напоминание, что режим работает и съедает входящие.
+
+    Без него «не беспокоить» выглядит как поломка: сообщения не приходят,
+    отчётов нет, и понять, что это включённый режим, неоткуда.
+    """
+    last = state.dnd_notified.get(owner_id, 0)
+    if time.time() - last < config.DND_NOTICE_EVERY:
+        return
+    state.dnd_notified[owner_id] = time.time()
+    total = await db.count_intercepted(owner_id, since=state.dnd_since(owner_id))
+    await reporter.send_report(
+        owner_id,
+        f"🌙 **Режим «Не беспокоить» работает.**\n\n"
+        f"Сообщение от {who} удалено, отправителю отправлен ответ. "
+        f"Перехвачено с момента включения: **{total}** — всё сохранено, "
+        f"смотрите в журнале.",
+        reply_markup=ui.markup([ui.button("☀️ Выключить", "dnd:off")],
+                               [ui.button("🔇 Что перехвачено", "m:muted:0")]))
+
+
 async def _dnd_reply(api, owner_id: int, chat_id: int, user_id: int,
                      connection_id: str) -> None:
     """Отвечает отправителю от имени владельца — не чаще раза в час на человека."""
@@ -284,6 +305,7 @@ async def on_business_message(api, message: dict) -> None:
         if await _intercept(api, owner_id, message, connection_id, reason="dnd"):
             await _dnd_reply(api, owner_id, chat.get("id"), sender.get("id"),
                              connection_id)
+            await _dnd_notice(owner_id, parse.display_name(sender))
         return
 
     settings = await chatprefs.flags(owner_id, chat.get("id"), True)

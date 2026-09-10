@@ -105,6 +105,7 @@ def rights_of(connection_id: str | None) -> dict:
 # Режим включается и выключается только вручную: срок здесь скорее вредит —
 # забыть выключить проще, чем не заметить, что он ещё включён.
 dnd_replied: dict[tuple[int, int], float] = {}     # (владелец, кто) -> когда
+dnd_notified: dict[int, float] = {}                # когда напоминали владельцу
 
 
 def dnd_active(owner_id: int) -> bool:
@@ -133,6 +134,7 @@ async def clear_dnd(owner_id: int) -> None:
 def _forget_dnd_replies(owner_id: int) -> None:
     for key in [k for k in dnd_replied if k[0] == owner_id]:
         dnd_replied.pop(key, None)
+    dnd_notified.pop(owner_id, None)
 
 
 # ------------------------------------------------------- белый список ------
