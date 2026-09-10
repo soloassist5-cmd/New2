@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import config
 import db
+from core import state
 
 _cache: dict[tuple[int, int], dict] = {}
 
@@ -44,8 +45,10 @@ async def toggle(owner_id: int, chat_id: int, key: str, value: bool, *,
                  title: str | None = None) -> None:
     await db.set_setting(owner_id, chat_id, key, int(value), title)
     invalidate(owner_id, chat_id)
+    state._persist_soon()
 
 
 async def reset(owner_id: int, chat_id: int) -> None:
     await db.reset_chat(owner_id, chat_id)
     invalidate(owner_id, chat_id)
+    state._persist_soon()

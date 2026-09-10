@@ -29,6 +29,13 @@ business: dict[str, dict] = {}
 users: dict[int, dict] = {}
 
 
+def _persist_soon() -> None:
+    """Настройки живут в базе, а диск на хостинге временный — просим копию."""
+    from core import backup
+
+    backup.request_soon()
+
+
 def admin_id() -> int:
     return config.OWNER_ID
 
@@ -82,6 +89,8 @@ async def remember_user(user_id: int, *, name: str | None = None,
     row = await db.upsert_user(user_id, name=name, chat_id=chat_id, status=status)
     users[user_id] = {"name": row["name"], "status": row["status"],
                       "chat_id": row["chat_id"], "dnd_since": row["dnd_since"]}
+    if status is not None:
+        _persist_soon()
     return users[user_id]
 
 
@@ -122,6 +131,7 @@ async def set_dnd(owner_id: int) -> None:
     users[owner_id]["dnd_since"] = since
     _forget_dnd_replies(owner_id)
     await db.set_dnd_since(owner_id, since)
+    _persist_soon()
 
 
 async def clear_dnd(owner_id: int) -> None:
@@ -129,6 +139,7 @@ async def clear_dnd(owner_id: int) -> None:
         users[owner_id]["dnd_since"] = 0
     _forget_dnd_replies(owner_id)
     await db.set_dnd_since(owner_id, 0)
+    _persist_soon()
 
 
 def _forget_dnd_replies(owner_id: int) -> None:
@@ -154,11 +165,14 @@ def is_allowed(owner_id: int, user_id: int) -> bool:
 async def allow_user(owner_id: int, user_id: int, name: str) -> None:
     allowlist.setdefault(owner_id, set()).add(user_id)
     await db.allow(owner_id, user_id, name)
+    _persist_soon()
 
 
 async def deny_user(owner_id: int, user_id: int) -> bool:
     allowlist.get(owner_id, set()).discard(user_id)
-    return await db.disallow(owner_id, user_id)
+    removed = await db.disallow(owner_id, user_id)
+    _persist_soon()
+    return removed
 
 
 # ------------------------------------------------------- удалено нами ------
@@ -206,11 +220,14 @@ async def mute_user(owner_id: int, chat_id: int, user_id: int, until: int,
                     reason: str = "") -> None:
     mutes[(owner_id, chat_id, user_id)] = until
     await db.add_mute(owner_id, chat_id, user_id, until, reason)
+    _persist_soon()
 
 
 async def unmute_user(owner_id: int, chat_id: int, user_id: int) -> bool:
     existed = mutes.pop((owner_id, chat_id, user_id), None) is not None
     await db.remove_mute(owner_id, chat_id, user_id)
+    if existed:
+        _persist_soon()
     return existed
 
 

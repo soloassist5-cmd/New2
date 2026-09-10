@@ -231,6 +231,7 @@ async def run() -> None:
             await stop.wait()
     finally:
         stop.set()
+        backup.forget_soon()
         if api is not None:
             # Успеть разобрать удаления, зависшие в окне ожидания.
             with contextlib.suppress(Exception):

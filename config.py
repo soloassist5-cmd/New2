@@ -93,6 +93,9 @@ PURGE_MEDIA_LIMIT: int = _int("PURGE_MEDIA_LIMIT", 10)
 ANIM_DELAY: float = _float("ANIM_DELAY", 0.4)
 
 BACKUP_EVERY_MIN: int = _int("BACKUP_EVERY_MIN", 60)
+# Настройки меняются редко, но терять их обиднее всего: после правки
+# копия уходит почти сразу, не дожидаясь общего расписания.
+BACKUP_SOON_SEC: int = _int("BACKUP_SOON_SEC", 60)
 RESTORE_ON_START: bool = _bool("RESTORE_ON_START", True)
 BACKUP_TAG = "#guard_backup"
 

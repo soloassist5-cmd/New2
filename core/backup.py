@@ -162,6 +162,46 @@ async def restore() -> bool:
     return False
 
 
+_soon_task: asyncio.Task | None = None
+
+
+def request_soon() -> None:
+    """Просит сохранить копию вскоре после правки настроек.
+
+    Общее расписание — раз в час, а передеплой может случиться через минуту
+    после того, как вы что-то настроили. Подряд идущие правки объединяются:
+    пока копия ещё не ушла, повторные просьбы ничего не планируют.
+    """
+    global _soon_task
+    if config.BACKUP_EVERY_MIN <= 0 or config.BACKUP_SOON_SEC <= 0:
+        return
+    if _soon_task is not None and not _soon_task.done():
+        return
+    try:
+        loop_ = asyncio.get_running_loop()
+    except RuntimeError:
+        return                      # вне событийного цикла планировать нечего
+    _soon_task = loop_.create_task(_upload_soon())
+
+
+async def _upload_soon() -> None:
+    try:
+        await asyncio.sleep(config.BACKUP_SOON_SEC)
+        await upload()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("внеочередной бэкап не удался: %r", e)
+
+
+def forget_soon() -> None:
+    """Снимает запланированную копию — при остановке процесса."""
+    global _soon_task
+    if _soon_task is not None and not _soon_task.done():
+        _soon_task.cancel()
+    _soon_task = None
+
+
 async def loop() -> None:
     """Фоновая задача: периодический бэкап + чистка кэша по TTL."""
     if config.BACKUP_EVERY_MIN <= 0:

@@ -14,4 +14,5 @@ os.environ.setdefault("API_HASH", "0" * 32)
 os.environ.setdefault("SESSION", "test-session")
 os.environ.setdefault("ANIM_DELAY", "0")
 os.environ["OWNER_ID"] = "0"      # администратора тесты задают сами
+os.environ["BACKUP_EVERY_MIN"] = "0"   # фоновые копии включает только их тест
 os.environ["DB_PATH"] = str(Path(tempfile.mkdtemp()) / "test.sqlite3")
