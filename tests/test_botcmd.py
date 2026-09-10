@@ -64,6 +64,16 @@ def test_start_gives_connection_steps_when_not_connected():
     assert "удалять сообщения" in text
 
 
+def test_instructions_start_with_the_botfather_toggle():
+    """Без Business Mode в @BotFather Telegram отвечает «не поддерживает режим
+    секретаря» — на этом спотыкаются раньше всего остального."""
+    text = run("/start").texts[0]
+    assert "BotFather" in text and "Business Mode" in text
+    assert "режим секретаря" in text
+    assert text.index("BotFather") < text.index("Telegram для бизнеса"), \
+        "тумблер включают до подключения к чатам"
+
+
 def test_connect_works_for_anyone_before_setup():
     """До подключения владельца ещё нет — инструкция публична и ничего не выдаёт."""
     api = run("/connect", from_id=STRANGER)
