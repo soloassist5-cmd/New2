@@ -136,13 +136,20 @@ class BotAPI:
             reply_markup=reply_markup,
         )
 
+    async def edit_message_reply_markup(self, chat_id: int, message_id: int,
+                                        reply_markup: dict | None = None) -> Any:
+        return await self.call("editMessageReplyMarkup", chat_id=chat_id,
+                               message_id=message_id, reply_markup=reply_markup)
+
     async def send_media(self, chat_id: int, file_id: str, media_type: str | None, *,
                          caption: str | None = None,
-                         business_connection_id: str | None = None) -> dict:
+                         business_connection_id: str | None = None,
+                         reply_markup: dict | None = None) -> dict:
         method, field = MEDIA_METHODS.get(media_type or "", ("sendDocument", "document"))
         params: dict[str, Any] = {
             "chat_id": chat_id, field: file_id,
             "business_connection_id": business_connection_id,
+            "reply_markup": reply_markup,
         }
         if caption and method != "sendSticker":
             params["caption"] = markup.trim(markup.to_html(caption), CAPTION_LIMIT)

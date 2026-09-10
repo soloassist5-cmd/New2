@@ -40,6 +40,12 @@ async def flags(owner_id: int, chat_id: int, is_private: bool) -> dict:
     return resolved
 
 
-async def toggle(owner_id: int, chat_id: int, key: str, value: bool) -> None:
-    await db.set_setting(owner_id, chat_id, key, int(value))
+async def toggle(owner_id: int, chat_id: int, key: str, value: bool, *,
+                 title: str | None = None) -> None:
+    await db.set_setting(owner_id, chat_id, key, int(value), title)
+    invalidate(owner_id, chat_id)
+
+
+async def reset(owner_id: int, chat_id: int) -> None:
+    await db.reset_chat(owner_id, chat_id)
     invalidate(owner_id, chat_id)

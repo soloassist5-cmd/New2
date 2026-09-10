@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, digest, dotcmd, parse, transcript
+from bot import access, digest, dotcmd, parse, transcript, ui
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -69,7 +69,9 @@ OWNER_ID_HINT = (
 )
 
 HELP = (
-    "**Здесь:**\n"
+    "**Проще всего — /menu:** там видно всё состояние, и любой режим "
+    "выключается той же кнопкой, которой включён.\n\n"
+    "**Командами:**\n"
     "/gmute — «не беспокоить»: удалять сообщения всех подряд\n"
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
@@ -93,6 +95,7 @@ ADMIN_HELP = (
 )
 
 MENU = (
+    ("menu", "панель управления: всё состояние и кнопки"),
     ("gmute", "не беспокоить: удалять сообщения всех"),
     ("ungmute", "выключить «не беспокоить»"),
     ("intercepted", "что перехвачено"),
@@ -140,11 +143,19 @@ async def cmd_start(api, message: dict, _args: str) -> None:
                               chat_id=chat_id)
 
     if connected(user_id):
-        await api.send_message(chat_id, WELCOME + help_text(user_id)
-                               + owner_id_hint(user_id))
+        await api.send_message(
+            chat_id, WELCOME + help_text(user_id) + owner_id_hint(user_id),
+            reply_markup=ui.markup([ui.button("🎛 Панель управления", "m:home")]))
         return
     await api.send_message(chat_id, WELCOME + connect_steps(user_id)
                            + ALREADY_LINKED_HINT + owner_id_hint(user_id))
+
+
+async def cmd_menu(api, message: dict, _args: str) -> None:
+    """Один экран, с которого видно всё состояние и всё выключается кнопкой."""
+    owner_id = (message.get("from") or {}).get("id")
+    text, keyboard = await ui.render(owner_id, "home")
+    await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
@@ -408,6 +419,8 @@ ADMIN_ONLY = {"users", "revoke", "backup"}
 
 HANDLERS = {
     "start": cmd_start,
+    "menu": cmd_menu,
+    "settings": cmd_menu,
     "connect": cmd_connect,
     "help": cmd_help,
     "status": cmd_status,
@@ -542,18 +555,11 @@ async def handle(api, message: dict) -> None:
             pass
 
 
-CALLBACK_RE = re.compile(r"^(ok|no):(-?\d+)$")
+ACCESS_RE = re.compile(r"^(ok|no):(-?\d+)$")
 
 
-async def handle_callback(api, query: dict) -> None:
-    """Кнопки «Принять» / «Отклонить» под заявкой на доступ."""
-    data = query.get("data") or ""
+async def _access_callback(api, query: dict, match: re.Match) -> None:
     admin = (query.get("from") or {}).get("id")
-    match = CALLBACK_RE.match(data)
-    if match is None:
-        await api.answer_callback(query["id"])
-        return
-
     card, toast = await access.decide(api, admin, match.group(1),
                                       int(match.group(2)))
     await api.answer_callback(query["id"], toast, show_alert=not card)
@@ -564,6 +570,93 @@ async def handle_callback(api, query: dict) -> None:
         await api.edit_message_text(origin["chat"]["id"], origin["message_id"], card)
     except Exception as e:                                   # noqa: BLE001
         log.debug("карточку заявки не удалось обновить: %r", e)
+
+
+async def _quick_action(api, owner_id: int, data: str) -> tuple[str, dict | None]:
+    """Кнопки под карточкой отчёта. Возвращает (всплывашка, новая клавиатура)."""
+    parts = data.split(":")
+    if parts[0] == "q" and len(parts) == 3:
+        chat_id, user_id = int(parts[1]), int(parts[2])
+        await state.mute_user(owner_id, chat_id, user_id, 0)
+        return "Замучен: сообщения будут удаляться", ui.markup(
+            [ui.button("🔊 Снять мут", f"mu:{chat_id}:{user_id}")])
+    if parts[0] == "qi" and len(parts) == 2:
+        chat_id = int(parts[1])
+        await chatprefs.toggle(owner_id, chat_id, "ignored", True)
+        return "Чат в игноре: больше ничего оттуда не присылаю", ui.markup(
+            [ui.button("↩️ Вернуть чат", f"ch:{chat_id}")])
+    return "", None
+
+
+async def _screen_action(api, owner_id: int, data: str) -> tuple[str, str, str]:
+    """Действие из панели. Возвращает (экран, аргумент, всплывашка)."""
+    parts = data.split(":")
+    kind = parts[0]
+
+    if kind == "m":
+        return (parts[1] if len(parts) > 1 else "home",
+                parts[2] if len(parts) > 2 else "", "")
+    if kind == "dnd":
+        if parts[1] == "on":
+            await state.set_dnd(owner_id)
+            return "dnd", "", "Включено"
+        since = state.dnd_since(owner_id)
+        await state.clear_dnd(owner_id)
+        await dotcmd.dnd_digest(owner_id, since)
+        return "dnd", "", "Выключено"
+    if kind == "mu":
+        chat_id, user_id = int(parts[1]), int(parts[2])
+        await state.unmute_user(owner_id, chat_id, user_id)
+        await state.unmute_user(owner_id, 0, user_id)
+        return "mutes", "", "Мут снят"
+    if kind == "al":
+        await state.deny_user(owner_id, int(parts[1]))
+        return "allow", "", "Убран из белого списка"
+    if kind == "ch":
+        await chatprefs.reset(owner_id, int(parts[1]))
+        return "chats", "", "Чат работает как раньше"
+    return "", "", ""          # незнакомая кнопка: молча закрываем всплывашку
+
+
+async def handle_callback(api, query: dict) -> None:
+    data = query.get("data") or ""
+    user_id = (query.get("from") or {}).get("id")
+    origin = query.get("message") or {}
+
+    access_match = ACCESS_RE.match(data)
+    if access_match is not None:
+        await _access_callback(api, query, access_match)
+        return
+
+    if not state.is_approved(user_id):
+        await api.answer_callback(query["id"], "Доступ к боту не открыт.",
+                                  show_alert=True)
+        return
+
+    try:
+        if data.startswith(("q:", "qi:")):
+            toast, keyboard = await _quick_action(api, user_id, data)
+            await api.answer_callback(query["id"], toast)
+            if keyboard is not None and origin:
+                await api.edit_message_reply_markup(
+                    origin["chat"]["id"], origin["message_id"], keyboard)
+            return
+
+        screen, arg, toast = await _screen_action(api, user_id, data)
+        await api.answer_callback(query["id"], toast)
+        if not screen:
+            return
+        text, keyboard = await ui.render(user_id, screen, arg)
+        if origin:
+            await api.edit_message_text(origin["chat"]["id"], origin["message_id"],
+                                        text, reply_markup=keyboard)
+    except Exception as e:                                   # noqa: BLE001
+        log.exception("кнопка %r не сработала", data)
+        try:
+            await api.answer_callback(query["id"], f"Ошибка: {type(e).__name__}",
+                                      show_alert=True)
+        except Exception:
+            pass
 
 
 async def publish_menu(api) -> None:

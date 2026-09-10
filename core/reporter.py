@@ -33,15 +33,16 @@ async def _warn_once(owner_id: int) -> None:
 
 
 async def _via_bot(owner_id: int, text: str, file_id: str | None,
-                   media_type: str | None) -> bool:
+                   media_type: str | None, reply_markup: dict | None) -> bool:
     chat_id = state.chat_of(owner_id)
     if not chat_id:
         return False
     try:
         if file_id:
-            await state.api.send_media(chat_id, file_id, media_type, caption=text)
+            await state.api.send_media(chat_id, file_id, media_type, caption=text,
+                                       reply_markup=reply_markup)
         else:
-            await state.api.send_message(chat_id, text)
+            await state.api.send_message(chat_id, text, reply_markup=reply_markup)
         state.bot_blocked = False
         return True
     except Exception as e:                                   # noqa: BLE001
@@ -59,10 +60,11 @@ async def _via_bot(owner_id: int, text: str, file_id: str | None,
 
 async def send_report(owner_id: int, text: str, *, file_id: str | None = None,
                       media_type: str | None = None,
-                      media_ref: int | None = None) -> bool:
+                      media_ref: int | None = None,
+                      reply_markup: dict | None = None) -> bool:
     """Отправляет отчёт владельцу. Возвращает True, если доставлено."""
     if state.api is not None:
-        if await _via_bot(owner_id, text, file_id, media_type):
+        if await _via_bot(owner_id, text, file_id, media_type, reply_markup):
             return True
         await _warn_once(owner_id)
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import access, dotcmd, parse, transcript
+from bot import access, dotcmd, parse, transcript, ui
 from core import chatprefs, fmt, mediastore, reporter, state
 
 log = logging.getLogger("business")
@@ -376,9 +376,10 @@ async def flush(key: tuple[int, int]) -> None:
     if len(ids) < config.PURGE_THRESHOLD:
         for row in rows:
             await db.add_deleted(dict(row))
-            await reporter.send_report(owner_id, await _deleted_card(row, where),
-                                       file_id=row["file_id"],
-                                       media_type=row["media_type"])
+            await reporter.send_report(
+                owner_id, await _deleted_card(row, where),
+                file_id=row["file_id"], media_type=row["media_type"],
+                reply_markup=ui.report_actions(chat_id, row["user_id"]))
         await db.drop_messages(owner_id, chat_id, [row["msg_id"] for row in rows])
         return
 

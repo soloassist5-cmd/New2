@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS allowlist (
 CREATE TABLE IF NOT EXISTS settings (
     owner_id   INTEGER NOT NULL,
     chat_id    INTEGER NOT NULL,
+    title      TEXT,
     antidelete INTEGER,
     log_edits  INTEGER,
     save_media INTEGER,
@@ -149,6 +150,9 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 """
 
+# Колонки, добавленные после выхода схемы: досоздаются на месте.
+LATE_COLUMNS = {"settings": {"title": "TEXT"}}
+
 # Таблицы, которые в первой версии схемы жили без owner_id.
 V1_TABLES = ("messages", "deleted", "edits", "intercepted", "mutes",
              "allowlist", "settings", "notes")
@@ -167,12 +171,23 @@ async def init() -> None:
         _conn = connection
         await _migrate_to_v2(connection)
         await connection.executescript(SCHEMA)
+        await _add_late_columns(connection)
         await connection.commit()
     except Exception:
         # Иначе останется висеть рабочий поток aiosqlite и битое соединение.
         _conn = None
         await connection.close()
         raise
+
+
+async def _add_late_columns(connection: aiosqlite.Connection) -> None:
+    for table, columns in LATE_COLUMNS.items():
+        async with connection.execute(f"PRAGMA table_info({table})") as cur:
+            existing = {row[1] for row in await cur.fetchall()}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                await connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
 
 async def _migrate_to_v2(connection: aiosqlite.Connection) -> None:
@@ -569,13 +584,58 @@ async def get_settings(owner_id: int, chat_id: int) -> dict:
     return {k: row[k] for k in DEFAULT_SETTINGS}
 
 
-async def set_setting(owner_id: int, chat_id: int, key: str, value: int) -> None:
+async def set_setting(owner_id: int, chat_id: int, key: str, value: int,
+                      title: str | None = None) -> None:
     if key not in DEFAULT_SETTINGS:
         raise KeyError(key)
     await execute(
-        f"INSERT INTO settings(owner_id,chat_id,{key}) VALUES (?,?,?) "
-        f"ON CONFLICT(owner_id,chat_id) DO UPDATE SET {key}=excluded.{key}",
-        (owner_id, chat_id, value))
+        f"INSERT INTO settings(owner_id,chat_id,{key},title) VALUES (?,?,?,?) "
+        f"ON CONFLICT(owner_id,chat_id) DO UPDATE SET {key}=excluded.{key}, "
+        f"title=COALESCE(excluded.title, settings.title)",
+        (owner_id, chat_id, value, title))
+
+
+async def name_of(owner_id: int, user_id: int) -> str | None:
+    """Как звали человека — берём из последнего, что от него сохранилось."""
+    row = await fetchone(
+        """SELECT user_name FROM intercepted
+            WHERE owner_id=? AND user_id=? AND user_name IS NOT NULL
+            ORDER BY at DESC LIMIT 1""", (owner_id, user_id))
+    if row is None:
+        row = await fetchone(
+            """SELECT user_name FROM deleted
+                WHERE owner_id=? AND user_id=? AND user_name IS NOT NULL
+                ORDER BY deleted_at DESC LIMIT 1""", (owner_id, user_id))
+    if row is None:
+        row = await fetchone(
+            """SELECT user_name FROM messages
+                WHERE owner_id=? AND user_id=? AND user_name IS NOT NULL
+                ORDER BY date DESC LIMIT 1""", (owner_id, user_id))
+    return row["user_name"] if row else None
+
+
+async def chat_title(owner_id: int, chat_id: int) -> str | None:
+    row = await fetchone(
+        "SELECT title FROM settings WHERE owner_id=? AND chat_id=? AND title IS NOT NULL",
+        (owner_id, chat_id))
+    if row:
+        return row["title"]
+    return await name_of(owner_id, chat_id)
+
+
+async def tuned_chats(owner_id: int):
+    """Чаты, для которых владелец что-то менял руками."""
+    return await fetchall(
+        "SELECT * FROM settings WHERE owner_id=? AND "
+        "(ignored=1 OR antidelete IS NOT NULL OR log_edits IS NOT NULL "
+        " OR save_media IS NOT NULL) ORDER BY chat_id",
+        (owner_id,))
+
+
+async def reset_chat(owner_id: int, chat_id: int) -> None:
+    """Возвращает чату поведение по умолчанию."""
+    await execute("DELETE FROM settings WHERE owner_id=? AND chat_id=?",
+                  (owner_id, chat_id))
 
 
 # ------------------------------------------------------------------- notes ---

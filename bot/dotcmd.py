@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import digest, parse, transcript
+from bot import digest, parse, transcript, ui
 from bot.editable import BizMessage
 from core import anim, chatprefs, fmt, state
 
@@ -97,14 +97,14 @@ class BizCtx:
         await anim.play(BizMessage(self.api, self.chat_id, sent["message_id"],
                                    self.connection_id), final, icon=icon, style=style)
 
-    async def private(self, text: str) -> None:
+    async def private(self, text: str, *, reply_markup: dict | None = None) -> None:
         """Отвечает в личку с ботом — собеседник ничего не видит."""
         await self.drop_command()
         target = state.chat_of(self.owner_id)
         if not target:
             return
         try:
-            await self.api.send_message(target, text)
+            await self.api.send_message(target, text, reply_markup=reply_markup)
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось ответить владельцу: %r", e)
 
@@ -231,7 +231,9 @@ async def cmd_gmute(ctx: BizCtx) -> None:
                        "режим «не беспокоить» работать не будет.")
         return
     await state.set_dnd(ctx.owner_id)
-    await ctx.private(dnd_enabled_text())
+    await ctx.private(dnd_enabled_text(), reply_markup=ui.markup(
+        [ui.button("☀️ Выключить", "dnd:off")],
+        [ui.button("🎛 Панель управления", "m:home")]))
 
 
 @bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
@@ -354,9 +356,18 @@ async def _toggle(ctx: BizCtx, key: str, label: str) -> None:
     current = (await chatprefs.flags(ctx.owner_id, ctx.chat_id, True))[key]
     value = (not current) if not ctx.args else ctx.args[0].lower() in {
         "on", "вкл", "1", "да", "yes", "true"}
-    await chatprefs.toggle(ctx.owner_id, ctx.chat_id, key, value)
-    await ctx.private(f"{'✅' if value else '🚫'} {label}: "
-                      f"**{'включено' if value else 'выключено'}** для этого чата.")
+    title = parse.display_name(ctx.message.get("chat"))
+    await chatprefs.toggle(ctx.owner_id, ctx.chat_id, key, value, title=title)
+
+    text = (f"{'✅' if value else '🚫'} {label}: "
+            f"**{'включено' if value else 'выключено'}** для чата «{title}».")
+    keyboard = None
+    if value and key == "ignored":
+        text += ("\n\nЯ больше ничего не сохраняю и не присылаю из этого чата. "
+                 "Ничего не удаляется — просто молчу.")
+        keyboard = ui.markup([ui.button("↩️ Вернуть как было", f"ch:{ctx.chat_id}")],
+                             [ui.button("🎛 Панель управления", "m:home")])
+    await ctx.private(text, reply_markup=keyboard)
 
 
 @bizcmd("antidelete", args="[on|off]", desc="логировать удалённые в этом чате",

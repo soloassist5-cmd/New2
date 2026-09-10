@@ -150,6 +150,7 @@ def test_only_admin_may_decide():
 
 
 def test_broken_callback_is_answered_and_ignored():
+    """Незнакомая кнопка не должна подменять сообщение, под которым нажата."""
     api = press("мусор")
     assert api.callbacks, "всплывашку всё равно закрываем"
     assert api.edits == []

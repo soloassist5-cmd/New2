@@ -185,3 +185,33 @@ def test_handler_error_is_reported_not_raised():
     finally:
         dotcmd.REGISTRY.pop("boom", None)
         dotcmd.COMMANDS[:] = [c for c in dotcmd.COMMANDS if c.name != "boom"]
+
+
+# ------------------------------------------- подтверждения с выключателем --
+# Главная жалоба была не про логику, а про то, что непонятно, как выключить.
+# Поэтому каждое включение приходит сразу с кнопкой обратного действия.
+
+def markup_buttons(api) -> list[str]:
+    return [b["callback_data"]
+            for markup in api.markups if markup
+            for row in markup["inline_keyboard"] for b in row]
+
+
+def test_gmute_confirmation_carries_the_off_switch():
+    api = run(".gmute", message_id=100)
+    assert "dnd:off" in markup_buttons(api)
+    assert "m:home" in markup_buttons(api)
+
+
+def test_ignore_explains_itself_and_offers_the_way_back():
+    api = run(".ignore", message_id=101)
+    answer = api.texts_to(OWNER_CHAT)[-1]
+    assert "Игнорирование чата" in answer and "включено" in answer
+    assert "Ничего не удаляется" in answer, "игнор — это про молчание, не про удаление"
+    assert f"ch:{PEER}" in markup_buttons(api), "вернуть можно кнопкой"
+
+
+def test_ignore_remembers_the_chat_name():
+    run(".ignore", message_id=102)
+    rows = asyncio.run(db.tuned_chats(OWNER))
+    assert rows and rows[0]["title"], "иначе в панели будет голый id"

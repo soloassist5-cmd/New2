@@ -23,6 +23,8 @@ class FakeBotAPI:
         self.captions: list[str | None] = []
         self.markups: list[dict | None] = []
         self.callbacks: list[tuple[str, str]] = []
+        self.markup_edits: list[tuple] = []
+        self.edit_markups: list[dict] = []
         self._ids = itertools.count(1000)
 
     async def send_message(self, chat_id, text, *, business_connection_id=None,
@@ -38,12 +40,19 @@ class FakeBotAPI:
     async def edit_message_text(self, chat_id, message_id, text, *,
                                 business_connection_id=None, reply_markup=None):
         self.edits.append((chat_id, message_id, text))
+        self.edit_markups.append(reply_markup or {"inline_keyboard": []})
         return {"message_id": message_id}
 
     async def send_media(self, chat_id, file_id, media_type, *, caption=None,
-                         business_connection_id=None):
+                         business_connection_id=None, reply_markup=None):
         self.media.append((chat_id, file_id, media_type, caption))
+        self.markups.append(reply_markup)
         return {"message_id": next(self._ids)}
+
+    async def edit_message_reply_markup(self, chat_id, message_id,
+                                        reply_markup=None):
+        self.markup_edits.append((chat_id, message_id, reply_markup))
+        return True
 
     async def send_file(self, chat_id, data, filename, *, caption=None):
         self.files.append((chat_id, filename))
