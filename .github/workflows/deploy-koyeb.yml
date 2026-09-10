@@ -1,5 +1,6 @@
 # Автодеплой на Koyeb при пуше в main.
-# Разово в дашборде Koyeb: Secrets -> создать api-id, api-hash, tg-session, log-chat.
+# Разово в дашборде Koyeb: Secrets -> создать api-id, api-hash, tg-session,
+# bot-token, log-chat.
 # В GitHub: Settings -> Secrets -> Actions -> KOYEB_TOKEN.
 name: Deploy · Koyeb
 
@@ -36,6 +37,7 @@ jobs:
             API_ID=@api-id,
             API_HASH=@api-hash,
             SESSION=@tg-session,
+            BOT_TOKEN=@bot-token,
             LOG_CHAT=@log-chat,
             BACKUP_EVERY_MIN=30,
             RESTORE_ON_START=1

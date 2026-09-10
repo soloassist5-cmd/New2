@@ -28,10 +28,19 @@
 
 ## Шаг 0. Подготовка (одинаково для всех)
 
-1. `my.telegram.org` → **API development tools** → получить `API_ID` и `API_HASH`.
-2. Создать **приватный канал** для логов, добавить в него себя, скопировать его
-   id (например, через `.id` уже после запуска, или ботом `@username_to_id_bot`).
-   Можно обойтись значением `me` — логи пойдут в «Избранное».
+Понадобятся **четыре** значения. Токен бота не заменяет остальные три: удаления
+ловит MTProto-клиент от вашего аккаунта, бот только доставляет отчёты.
+
+| Переменная | Где взять |
+|---|---|
+| `API_ID` | `my.telegram.org` → *API development tools* |
+| `API_HASH` | там же |
+| `SESSION` | `python scripts/gen_session.py` локально |
+| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → `/newbot` |
+
+1. `my.telegram.org` → **API development tools** → `API_ID` и `API_HASH`.
+2. [@BotFather](https://t.me/BotFather) → `/newbot` → имя и username бота → он
+   пришлёт токен вида `8123456789:AAH...`. Это и есть `BOT_TOKEN`.
 3. Локально сгенерировать строку сессии:
 
    ```bash
@@ -41,7 +50,13 @@
 
    Строка = полный доступ к аккаунту. Её место — только в секретах хостинга,
    никогда в git.
-4. Форкнуть/запушить репозиторий на GitHub.
+4. Опционально: создать **приватный канал** под копии медиа, добавить туда себя
+   и указать его id в `LOG_CHAT`. Можно оставить `me` — копии лягут в «Избранное».
+5. Форкнуть/запушить репозиторий на GitHub.
+
+После первого запуска: откройте чат со своим ботом и нажмите **Start** — без
+этого Telegram не даст боту написать вам первым. Проверка — команда `/status`
+в чате с ботом.
 
 ---
 
@@ -56,14 +71,15 @@ GitHub-репозитория по Dockerfile.
 2. Builder: **Dockerfile**. Instance: **Free**. Region: `fra`.
 3. *Ports*: `8080`, protocol `HTTP`, route `/`. Health check: путь `/health`.
 4. *Environment variables* — добавить как **secret**: `API_ID`, `API_HASH`,
-   `SESSION`, `LOG_CHAT`; как обычные: `BACKUP_EVERY_MIN=30`,
+   `SESSION`, `BOT_TOKEN`; как обычные: `LOG_CHAT=me`, `BACKUP_EVERY_MIN=30`,
    `RESTORE_ON_START=1`, `PORT=8080`.
 5. Deploy. Дальше каждый push в `main` пересобирает сервис автоматически.
 
 **Через GitHub Actions** (в репозитории уже лежит
 [`.github/workflows/deploy-koyeb.yml`](.github/workflows/deploy-koyeb.yml)):
 
-1. В Koyeb: *Secrets* → создать `api-id`, `api-hash`, `tg-session`, `log-chat`.
+1. В Koyeb: *Secrets* → создать `api-id`, `api-hash`, `tg-session`, `bot-token`,
+   `log-chat`.
 2. В Koyeb: *Account settings* → *API* → создать токен.
 3. В GitHub: *Settings → Secrets and variables → Actions* → добавить
    `KOYEB_TOKEN`.
@@ -71,7 +87,9 @@ GitHub-репозитория по Dockerfile.
    файле workflow — это ссылки на секреты Koyeb, самих значений в репозитории нет.
 
 Проверка: `https://<app>-<org>.koyeb.app/health` должен отдавать
-`{"status":"ok","connected":true,...}`, а в лог-чат прилетит «🛡 Guard запущен».
+`{"status":"ok","connected":true,"bot":true,...}`. Затем нажмите **Start** в
+чате с ботом — туда прилетит «🛡 Guard запущен» и дальше пойдут отчёты.
+Если `bot_reachable: false` — вы ещё не нажали Start.
 
 ---
 
@@ -82,7 +100,7 @@ GitHub-репозитория по Dockerfile.
 
 1. В дашборде: *Blueprints* → *New Blueprint Instance* → выбрать репозиторий.
    Render подхватит [`render.yaml`](render.yaml) и создаст сервис.
-2. Заполнить секреты `API_ID`, `API_HASH`, `SESSION`, `LOG_CHAT`
+2. Заполнить секреты `API_ID`, `API_HASH`, `SESSION`, `BOT_TOKEN`, `LOG_CHAT`
    (в `render.yaml` они помечены `sync: false`, то есть задаются только в UI).
 3. Завести на [UptimeRobot](https://uptimerobot.com) (или cron-job.org) HTTP(s)
    монитор на `https://<service>.onrender.com/health` с интервалом 5 минут —
@@ -102,7 +120,7 @@ GitHub-репозитория по Dockerfile.
 ```bash
 fly launch --no-deploy          # подхватит fly.toml
 fly volumes create guard_data --size 1 --region fra
-fly secrets set API_ID=... API_HASH=... SESSION=... LOG_CHAT=...
+fly secrets set API_ID=... API_HASH=... SESSION=... BOT_TOKEN=... LOG_CHAT=me
 fly deploy
 ```
 
@@ -136,8 +154,14 @@ Termux:Boot.
 
 ## Эксплуатация
 
-**Проверка живости.** `/health` отдаёт `connected`, аптайм и число мутов. В
-Telegram — `.ping` и `.alive`.
+**Проверка живости.** `/health` отдаёт `connected`, `bot`, `bot_reachable`,
+аптайм и число мутов. В Telegram — `.ping` и `.alive` от аккаунта, `/status` в
+чате с ботом.
+
+**Отчёты не приходят.** Сначала проверьте `bot_reachable` в `/health`: если
+`false` — не нажат **Start** в чате с ботом. Пока бот недоступен, отчёты не
+теряются: они уходят в `LOG_CHAT` (по умолчанию «Избранное»), и туда же придёт
+подсказка про Start.
 
 **Данные.** `.stats` — размер базы и счётчики. `.backup` — выгрузить базу в
 лог-чат прямо сейчас. Старые бэкапы чистятся автоматически, хранятся последние 5.

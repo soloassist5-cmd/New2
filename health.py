@@ -24,6 +24,8 @@ async def _status(_request: web.Request) -> web.Response:
         "uptime_sec": int(time.time() - state.start_time),
         "mutes": len(state.mutes),
         "afk": state.afk_since is not None,
+        "bot": bool(state.bot),
+        "bot_reachable": bool(state.bot) and not state.bot_blocked,
     }, status=200 if connected else 503)
 
 

@@ -6,9 +6,15 @@ from collections import OrderedDict
 
 import db
 
-client = None            # TelegramClient, выставляется в main.py
-me = None                # telethon User
-log_entity = None        # сущность лог-чата
+client = None            # TelegramClient юзербота, выставляется в main.py
+me = None                # telethon User — владелец аккаунта
+log_entity = None        # чат-хранилище копий медиа
+
+bot = None               # TelegramClient бота из @BotFather (может отсутствовать)
+owner_id: int = 0        # кому бот шлёт отчёты
+owner_peer = None        # разрешённый peer владельца для бота
+bot_blocked: bool = False  # владелец ещё не нажал /start — предупреждаем один раз
+
 start_time: float = time.time()
 
 # ---------------------------------------------------------------- AFK ------

@@ -13,7 +13,7 @@ from typing import Any
 from telethon import events
 
 import config
-from core import fmt, state
+from core import fmt, reporter, state
 
 log = logging.getLogger("dispatcher")
 
@@ -146,13 +146,9 @@ async def _report_error(ctx: Ctx, cmd: Command, exc: Exception) -> None:
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     log.exception("ошибка в команде %s", cmd.name)
     await ctx.fail(f"`{type(exc).__name__}: {exc}`", delete_after=10)
-    if state.log_entity is None:
-        return
     try:
-        await state.client.send_message(
-            state.log_entity,
-            f"❗️ **Ошибка команды** `{cmd.name}`\n\n```\n{tb[-TRACE_LIMIT:]}\n```",
-        )
+        await reporter.send_report(
+            f"❗️ **Ошибка команды** `{cmd.name}`\n\n```\n{tb[-TRACE_LIMIT:]}\n```")
     except Exception:
         pass
 

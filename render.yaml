@@ -16,6 +16,8 @@ services:
         sync: false
       - key: SESSION
         sync: false
+      - key: BOT_TOKEN
+        sync: false
       - key: LOG_CHAT
         sync: false
       - key: PREFIX

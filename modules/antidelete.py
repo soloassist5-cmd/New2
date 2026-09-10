@@ -9,7 +9,7 @@ from telethon import events
 
 import config
 import db
-from core import fmt, mediastore, state
+from core import fmt, mediastore, reporter, state
 from core.dispatcher import Ctx, command
 
 log = logging.getLogger("antidelete")
@@ -138,7 +138,7 @@ async def _on_delete(event) -> None:
             if not conf["antidelete"] or conf["ignored"]:
                 continue
             await db.add_deleted(dict(row))
-            await mediastore.send_log(await _card(row), media_ref=row["media_ref"])
+            await reporter.send_report(await _card(row), media_ref=row["media_ref"])
             await db.drop_message(row["chat_id"], row["msg_id"])
         except Exception as e:                               # noqa: BLE001
             log.warning("обработка удаления %s: %r", msg_id, e)
@@ -170,7 +170,7 @@ async def _on_edit(event) -> None:
         return
     who = await _name(event.sender_id)
     where = await _name(chat_id)
-    await mediastore.send_log(
+    await reporter.send_report(
         "✏️ **Сообщение изменено**\n"
         f"👤 {who} (`{event.sender_id}`)\n"
         f"💬 {where} (`{chat_id}`)\n\n"

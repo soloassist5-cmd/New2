@@ -14,7 +14,8 @@ import config
 import db
 import health
 import modules
-from core import backup, dispatcher, fmt, state
+from core import backup, dispatcher, fmt, reporter, state
+from modules import botui
 
 LOG_FILE = config.ROOT / "data" / "guard.log"
 
@@ -47,6 +48,25 @@ async def resolve_log_chat(client) -> None:
             state.log_entity = await client.get_entity("me")
         except Exception:
             state.log_entity = None
+
+
+async def start_bot() -> None:
+    """Поднимает бота-почтальона, если задан BOT_TOKEN."""
+    if not config.report_via_bot():
+        log.info("BOT_TOKEN не задан — отчёты пойдут в LOG_CHAT от вашего аккаунта")
+        return
+    bot = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
+    await bot.start(bot_token=config.BOT_TOKEN)
+    state.bot = bot
+    state.owner_id = config.OWNER_ID or (state.me.id if state.me else 0)
+
+    botui.setup_bot(bot)
+    await botui.publish_menu(bot)
+
+    known = await reporter.resolve_owner()
+    me_bot = await bot.get_me()
+    log.info("бот @%s готов, владелец %s%s", me_bot.username, state.owner_id,
+             "" if known else " (ждёт вашего /start)")
 
 
 async def announce_restart() -> None:
@@ -105,22 +125,20 @@ async def run() -> None:
     modules.setup_all(client)
     log.info("команд зарегистрировано: %s", len(dispatcher.COMMANDS))
 
+    await start_bot()
+
     runner = await health.start()
     task = asyncio.create_task(backup.loop())
 
     await announce_restart()
-    if state.log_entity is not None:
-        try:
-            await client.send_message(
-                state.log_entity,
-                f"🛡 **Guard запущен**\n"
-                f"👤 {fmt.name_of(state.me)} (`{state.me.id}`)\n"
-                f"⌨️ префикс `{config.PREFIX}` · команд {len(dispatcher.COMMANDS)}\n"
-                f"🔇 мутов восстановлено: {len(state.mutes)}",
-                link_preview=False,
-            )
-        except Exception:
-            pass
+    where = "через бота" if state.bot is not None else "в лог-чат"
+    await reporter.send_report(
+        f"🛡 **Guard запущен**\n"
+        f"👤 {fmt.name_of(state.me)} (`{state.me.id}`)\n"
+        f"⌨️ префикс `{config.PREFIX}` · команд {len(dispatcher.COMMANDS)}\n"
+        f"🔇 мутов восстановлено: {len(state.mutes)}\n"
+        f"📨 отчёты идут {where}"
+    )
 
     try:
         await client.run_until_disconnected()
@@ -128,6 +146,8 @@ async def run() -> None:
         task.cancel()
         if runner is not None:
             await runner.cleanup()
+        if state.bot is not None:
+            await state.bot.disconnect()
         await db.close()
 
 

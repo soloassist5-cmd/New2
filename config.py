@@ -43,7 +43,14 @@ API_ID: int = _int("API_ID", 0)
 API_HASH: str = os.getenv("API_HASH", "").strip()
 SESSION: str = os.getenv("SESSION", "").strip()
 
+# Куда юзербот складывает копии медиа (после удаления файл уже не скачать).
+# Отчёты сюда попадают, только если BOT_TOKEN не задан.
 LOG_CHAT = _log_chat(os.getenv("LOG_CHAT", "me"))
+
+# Бот из @BotFather — доставляет отчёты вам в личку.
+BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
+# Кому писать. 0 = сам владелец аккаунта, определяется автоматически.
+OWNER_ID: int = _int("OWNER_ID", 0)
 PREFIX: str = (os.getenv("PREFIX", ".") or ".").strip()
 
 DB_PATH: Path = Path(os.getenv("DB_PATH", "data/guard.sqlite3"))
@@ -70,6 +77,10 @@ BACKUP_TAG = "#guard_backup"
 
 PORT: int = _int("PORT", 8080)
 
+
+
+def report_via_bot() -> bool:
+    return bool(BOT_TOKEN)
 
 
 def validate() -> list[str]:

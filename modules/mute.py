@@ -14,7 +14,7 @@ from telethon.errors import ChatAdminRequiredError, MessageDeleteForbiddenError
 
 import config
 import db
-from core import anim, fmt, mediastore, state
+from core import anim, fmt, mediastore, reporter, state
 from core.dispatcher import Ctx, command
 
 log = logging.getLogger("mute")
@@ -153,7 +153,7 @@ async def _log_intercepted(event, media_ref: int | None) -> None:
     if kind:
         head += f"\n{mediastore.KIND_ICON.get(kind, '📎')} {kind}"
     text = head + (f"\n\n{body}" if body else "")
-    await mediastore.send_log(text, media_ref=media_ref)
+    await reporter.send_report(text, media_ref=media_ref)
 
 
 async def _enforce(event) -> None:
@@ -174,7 +174,7 @@ async def _enforce(event) -> None:
         state.mark_own_deletion(event.chat_id, message.id,
                                 private=bool(event.is_private))
     except (ChatAdminRequiredError, MessageDeleteForbiddenError):
-        await mediastore.send_log(
+        await reporter.send_report(
             f"⚠️ Не хватает прав удалять сообщения в чате `{event.chat_id}` — "
             f"мут там не работает.")
         return
