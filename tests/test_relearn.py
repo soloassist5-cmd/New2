@@ -75,13 +75,13 @@ def test_restored_connection_keeps_working():
 
 def test_owner_is_told_once():
     incoming(text="привет", message_id=1)
-    notes = [t for _, t, _ in state.api.sent if "восстановлено" in t]
+    notes = [t for _, t, _ in state.api.sent if "восстановлена" in t]
     assert len(notes) == 1
 
     state.business.clear()
     business._relearn_attempt.clear()
     incoming(text="ещё", message_id=2)
-    notes = [t for _, t, _ in state.api.sent if "восстановлено" in t]
+    notes = [t for _, t, _ in state.api.sent if "восстановлена" in t]
     assert len(notes) == 1, "повторно не сообщаем"
 
 

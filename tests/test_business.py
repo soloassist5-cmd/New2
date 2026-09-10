@@ -266,7 +266,7 @@ def test_do_not_disturb_tells_the_owner_it_is_working():
                if "Не беспокоить» работает" in text]
     assert len(notices) == 1
     assert "Перехвачено с момента включения" in notices[0]
-    assert any(m and "dnd:off" in str(m) for m in api.markups), "кнопка выключения"
+    assert "/ungmute" in notices[0], "сразу видно, чем выключить"
 
 
 def test_the_notice_does_not_repeat_on_every_message():

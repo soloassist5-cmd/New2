@@ -143,11 +143,16 @@ TRACE_LIMIT = 1500
 
 
 async def _report_error(ctx: Ctx, cmd: Command, exc: Exception) -> None:
+    """Человеку — короткое сообщение, разбираться по трейсбеку не ему."""
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     log.exception("ошибка в команде %s", cmd.name)
-    await ctx.fail(f"`{type(exc).__name__}: {exc}`", delete_after=10)
+    await ctx.fail(f"Не получилось выполнить `{config.PREFIX}{cmd.name}`.",
+                   delete_after=10)
+    if not config.OWNER_ID:
+        return
     try:
         await reporter.send_report(
+            config.OWNER_ID,
             f"❗️ **Ошибка команды** `{cmd.name}`\n\n```\n{tb[-TRACE_LIMIT:]}\n```")
     except Exception:
         pass

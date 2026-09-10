@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import digest, parse, transcript, ui
+from bot import digest, parse, transcript
 from bot.editable import BizMessage
 from core import anim, chatprefs, fmt, state
 
@@ -97,14 +97,14 @@ class BizCtx:
         await anim.play(BizMessage(self.api, self.chat_id, sent["message_id"],
                                    self.connection_id), final, icon=icon, style=style)
 
-    async def private(self, text: str, *, reply_markup: dict | None = None) -> None:
+    async def private(self, text: str) -> None:
         """Отвечает в личку с ботом — собеседник ничего не видит."""
         await self.drop_command()
         target = state.chat_of(self.owner_id)
         if not target:
             return
         try:
-            await self.api.send_message(target, text, reply_markup=reply_markup)
+            await self.api.send_message(target, text)
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось ответить владельцу: %r", e)
 
@@ -231,9 +231,7 @@ async def cmd_gmute(ctx: BizCtx) -> None:
                        "режим «не беспокоить» работать не будет.")
         return
     await state.set_dnd(ctx.owner_id)
-    await ctx.private(dnd_enabled_text(), reply_markup=ui.markup(
-        [ui.button("☀️ Выключить", "dnd:off")],
-        [ui.button("🎛 Панель управления", "m:home")]))
+    await ctx.private(dnd_enabled_text())
 
 
 @bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
@@ -305,7 +303,7 @@ async def allowed_text(owner_id: int) -> str:
     return fmt.truncate("\n".join(lines), 3500)
 
 
-@bizcmd("muted", args="[N]", desc="что перехвачено мутом и «не беспокоить»")
+@bizcmd("muted", args="[N]", desc="что удалили мут и «не беспокоить»")
 async def cmd_muted(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 20
     rows = await db.intercepted(ctx.owner_id, limit=max(1, min(limit, 200)))
@@ -361,16 +359,16 @@ async def _toggle(ctx: BizCtx, key: str, label: str) -> None:
 
     text = (f"{'✅' if value else '🚫'} {label}: "
             f"**{'включено' if value else 'выключено'}** для чата «{title}».")
-    keyboard = None
     if value and key == "ignored":
         text += ("\n\nЯ больше ничего не сохраняю и не присылаю из этого чата. "
-                 "Ничего не удаляется — просто молчу.")
-        keyboard = ui.markup([ui.button("↩️ Вернуть как было", f"ch:{ctx.chat_id}")],
-                             [ui.button("🎛 Панель управления", "m:home")])
-    await ctx.private(text, reply_markup=keyboard)
+                 "Ничего не удаляется — просто молчу.\n"
+                 f"Вернуть как было: `{config.PREFIX}ignore off` здесь же "
+                 "или /chats в чате со мной.")
+    await ctx.private(text)
 
 
-@bizcmd("antidelete", args="[on|off]", desc="логировать удалённые в этом чате",
+@bizcmd("antidelete", args="[on|off]",
+        desc="сохранять удалённые сообщения этого чата",
         aliases=["ad"])
 async def cmd_antidelete(ctx: BizCtx) -> None:
     await _toggle(ctx, "antidelete", "Антиудаление")
@@ -379,6 +377,30 @@ async def cmd_antidelete(ctx: BizCtx) -> None:
 @bizcmd("ignore", args="[on|off]", desc="полностью игнорировать этот чат")
 async def cmd_ignore(ctx: BizCtx) -> None:
     await _toggle(ctx, "ignored", "Игнорирование чата")
+
+
+@bizcmd("chats", desc="чаты, где вы меняли настройки, и как вернуть как было")
+async def cmd_chats(ctx: BizCtx) -> None:
+    await ctx.private(await chats_text(ctx.owner_id))
+
+
+async def chats_text(owner_id: int) -> str:
+    rows = await db.tuned_chats(owner_id)
+    if not rows:
+        return ("⚙️ Особых настроек нет — во всех личных чатах я сохраняю "
+                "удалённые сообщения.")
+    lines = ["⚙️ **Чаты с изменёнными настройками**", ""]
+    for row in rows:
+        title = row["title"] or f"чат `{row['chat_id']}`"
+        if row["ignored"]:
+            lines.append(f"🙈 **{title}** — игнорирую полностью")
+        elif row["antidelete"] == 0:
+            lines.append(f"🔕 **{title}** — не сохраняю удалённые")
+        else:
+            lines.append(f"⚙️ **{title}** — настройки изменены")
+    lines.append(f"\nВернуть как было: `{config.PREFIX}ignore off` или "
+                 f"`{config.PREFIX}antidelete on` в нужной переписке.")
+    return fmt.truncate("\n".join(lines), 3500)
 
 
 @bizcmd("deleted", args="[N]", desc="последние удалённые в этом чате", aliases=["dels"])
@@ -438,22 +460,22 @@ async def cmd_ping(ctx: BizCtx) -> None:
     target = state.chat_of(ctx.owner_id)
     if target:
         await ctx.api.send_message(
-            target, f"🏓 **{delay:.0f} мс**\n"
-                    f"⏱ аптайм: {fmt.uptime(time.time() - state.start_time)}")
+            target, f"🏓 **На связи.** Отклик {delay:.0f} мс, "
+                    f"работаю без перерыва {fmt.uptime(time.time() - state.start_time)}.")
 
 
-@bizcmd("stats", desc="статистика базы")
+@bizcmd("stats", desc="сколько всего сохранено")
 async def cmd_stats(ctx: BizCtx) -> None:
     s = await db.stats(ctx.owner_id)
-    await ctx.private(
-        "📊 **Статистика**\n"
-        f"🗂 в кэше: **{s['cached']}**\n"
-        f"🗑 удалённых сохранено: **{s['deleted']}**\n"
-        f"✏️ правок: **{s['edits']}**\n"
-        f"🔇 мутов: **{s['mutes']}**\n"
-        f"🔗 подключений Business: **{s['business']}**\n"
-        f"💾 база: **{fmt.size(s['size'])}**"
-    )
+    lines = ["📊 **Что у меня сохранено**", "",
+             f"🗑 удалённых сообщений: **{s['deleted']}**"]
+    if s["edits"]:
+        lines.append(f"✏️ изменённых: **{s['edits']}**")
+    if s["intercepted"]:
+        lines.append(f"🔒 перехвачено: **{s['intercepted']}**")
+    if s["mutes"]:
+        lines.append(f"🔇 замучено: **{s['mutes']}**")
+    await ctx.private("\n".join(lines))
 
 
 @bizcmd("help", args="[команда]", desc="список команд")
@@ -502,6 +524,7 @@ async def handle(api, message: dict, connection_id: str, owner_id: int) -> None:
     )
     try:
         await cmd.handler(ctx)
-    except Exception as e:                                   # noqa: BLE001
+    except Exception:                                   # noqa: BLE001
         log.exception("ошибка команды %s", cmd.name)
-        await ctx.fail(f"`{type(e).__name__}: {e}`")
+        await ctx.fail(f"Не получилось выполнить `{config.PREFIX}{cmd.name}`. "
+                       "Попробуйте ещё раз.")

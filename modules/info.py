@@ -93,10 +93,3 @@ async def cmd_stats(ctx: Ctx) -> None:
         f"⏱ аптайм: **{fmt.uptime(time.time() - state.start_time)}**\n"
         f"🧹 TTL кэша: {config.CACHE_TTL_HOURS} ч · журнала: {config.DELETED_TTL_DAYS} дн"
     )
-
-
-@command("json", args="(реплаем)", cat=CAT, desc="сырой объект сообщения")
-async def cmd_json(ctx: Ctx) -> None:
-    reply = await ctx.reply_msg()
-    target = reply if reply is not None else ctx.msg
-    await ctx.done(f"```\n{fmt.truncate(target.stringify(), 3500)}\n```")

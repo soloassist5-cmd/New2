@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import access, dotcmd, parse, transcript, ui
+from bot import access, dotcmd, parse, transcript
 from core import chatprefs, fmt, mediastore, reporter, state
 
 log = logging.getLogger("business")
@@ -159,10 +159,9 @@ async def ensure_connection(api, connection_id: str | None) -> dict | None:
         _relearn_announced.add(owner_id)
         await reporter.send_report(
             owner_id,
-            "🔄 **Подключение к личным чатам восстановлено.**\n\n"
-            "База была пуста после перезапуска — я перечитал связку у Telegram. "
-            "Сохранённые ранее удалённые сообщения при этом потерялись; чтобы "
-            "такого не было, пришлите мне последний файл бэкапа."
+            "🔄 **Связь с вашими чатами восстановлена после обновления.**\n\n"
+            "Всё снова работает. Сообщения, сохранённые до обновления, могли "
+            "не уцелеть — новые сохраняются как обычно."
         )
     return info or None
 
@@ -250,10 +249,8 @@ async def _dnd_notice(owner_id: int, who: str) -> None:
         owner_id,
         f"🌙 **Режим «Не беспокоить» работает.**\n\n"
         f"Сообщение от {who} удалено, отправителю отправлен ответ. "
-        f"Перехвачено с момента включения: **{total}** — всё сохранено, "
-        f"смотрите в журнале.",
-        reply_markup=ui.markup([ui.button("☀️ Выключить", "dnd:off")],
-                               [ui.button("🔇 Что перехвачено", "m:muted:0")]))
+        f"Перехвачено с момента включения: **{total}** — всё сохранено.\n\n"
+        f"Посмотреть: /intercepted · выключить: /ungmute")
 
 
 async def _dnd_reply(api, owner_id: int, chat_id: int, user_id: int,
@@ -403,8 +400,7 @@ async def flush(key: tuple[int, int]) -> None:
             await db.add_deleted(dict(row))
             await reporter.send_report(
                 owner_id, await _deleted_card(row, where),
-                file_id=row["file_id"], media_type=row["media_type"],
-                reply_markup=ui.report_actions(chat_id, row["user_id"]))
+                file_id=row["file_id"], media_type=row["media_type"])
         await db.drop_messages(owner_id, chat_id, [row["msg_id"] for row in rows])
         return
 

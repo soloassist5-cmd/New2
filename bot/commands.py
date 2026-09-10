@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, digest, dotcmd, parse, transcript, ui
+from bot import access, digest, dotcmd, parse, transcript
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -69,23 +69,24 @@ OWNER_ID_HINT = (
 )
 
 HELP = (
-    "**Проще всего — /menu:** там видно всё состояние, и любой режим "
-    "выключается той же кнопкой, которой включён.\n\n"
-    "**Командами:**\n"
-    "/why — почему ничего не приходит\n"
+    "**Здесь:**\n"
     "/gmute — «не беспокоить»: удалять сообщения всех подряд\n"
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
     "/deleted [N] — последние удалённые\n"
+    "/chats — чаты, где вы меняли настройки\n"
     "/find <текст> — поиск по всему сохранённому\n"
     "/mutes, /unmute <id> — муты\n"
     "/export — ваш журнал файлом\n"
     "/status — состояние и права\n"
-    "/connect — инструкция по подключению\n\n"
-    "**В самих переписках** (пишете вы, от своего имени):\n"
-    "`{p}mute` · `{p}unmute` · `{p}gmute` · `{p}allow` · `{p}del` · `{p}purge` · "
-    "`{p}deleted` · `{p}muted` · `{p}export` · `{p}help`"
+    "/connect — инструкция по подключению"
+)
+
+IN_CHAT_HINT = (
+    "\n\n**В самих переписках** (пишете вы, от своего имени):\n"
+    "`{p}mute` · `{p}unmute` · `{p}gmute` · `{p}del` · `{p}purge` · `{p}deleted` · "
+    "`{p}id` · `{p}help`"
 )
 
 ADMIN_HELP = (
@@ -96,12 +97,11 @@ ADMIN_HELP = (
 )
 
 MENU = (
-    ("menu", "панель управления: всё состояние и кнопки"),
-    ("why", "почему ничего не приходит"),
     ("gmute", "не беспокоить: удалять сообщения всех"),
     ("ungmute", "выключить «не беспокоить»"),
     ("intercepted", "что перехвачено"),
     ("deleted", "последние удалённые сообщения"),
+    ("chats", "чаты с изменёнными настройками"),
     ("find", "поиск по сохранённому: /find текст"),
     ("allowed", "белый список"),
     ("mutes", "активные муты"),
@@ -129,10 +129,8 @@ def connected(user_id: int) -> bool:
 
 
 def owner_id_hint(user_id: int) -> str:
-    """Без OWNER_ID база не переживает передеплой — подсказываем, где взять id."""
-    if config.OWNER_ID or state.users.get(user_id, {}).get("status") != db.APPROVED:
-        return ""
-    return OWNER_ID_HINT.format(user_id=user_id)
+    """Техническая подсказка: показывается, только пока администратор не назначен."""
+    return "" if config.OWNER_ID else OWNER_ID_HINT.format(user_id=user_id)
 
 
 # ----------------------------------------------------------------- команды --
@@ -145,26 +143,11 @@ async def cmd_start(api, message: dict, _args: str) -> None:
                               chat_id=chat_id)
 
     if connected(user_id):
-        await api.send_message(
-            chat_id, WELCOME + help_text(user_id) + owner_id_hint(user_id),
-            reply_markup=ui.markup([ui.button("🎛 Панель управления", "m:home")]))
+        await api.send_message(chat_id, WELCOME + help_text(user_id)
+                               + owner_id_hint(user_id))
         return
     await api.send_message(chat_id, WELCOME + connect_steps(user_id)
                            + ALREADY_LINKED_HINT + owner_id_hint(user_id))
-
-
-async def cmd_menu(api, message: dict, _args: str) -> None:
-    """Один экран, с которого видно всё состояние и всё выключается кнопкой."""
-    owner_id = (message.get("from") or {}).get("id")
-    text, keyboard = await ui.render(owner_id, "home")
-    await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
-
-
-async def cmd_why(api, message: dict, _args: str) -> None:
-    """«Почему ничего не приходит» — бот проверяет себя и отвечает сам."""
-    owner_id = (message.get("from") or {}).get("id")
-    text, keyboard = await ui.render(owner_id, "why")
-    await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
@@ -172,8 +155,10 @@ async def cmd_connect(api, message: dict, _args: str) -> None:
     await api.send_message(message["chat"]["id"], connect_steps(user_id))
 
 
-def help_text(user_id: int) -> str:
+def help_text(user_id: int, *, in_chat_hint: bool = True) -> str:
     text = HELP.format(p=config.PREFIX)
+    if in_chat_hint:
+        text += IN_CHAT_HINT.format(p=config.PREFIX)
     return text + ADMIN_HELP if state.is_admin(user_id) else text
 
 
@@ -183,8 +168,8 @@ async def cmd_help(api, message: dict, _args: str) -> None:
     if not connected(user_id):
         await api.send_message(chat_id, NOT_CONNECTED)
         return
-    await api.send_message(chat_id, help_text(user_id) + "\n\n"
-                           + dotcmd.help_text())
+    await api.send_message(chat_id, help_text(user_id, in_chat_hint=False)
+                           + "\n\n" + dotcmd.help_text())
 
 
 async def cmd_status(api, message: dict, _args: str) -> None:
@@ -193,37 +178,53 @@ async def cmd_status(api, message: dict, _args: str) -> None:
     chat_id = message["chat"]["id"]
     user_id = (message.get("from") or {}).get("id")
     stats = await db.stats(user_id)
-    lines = [
-        "📊 **Состояние**",
-        f"⏱ аптайм: {fmt.uptime(time.time() - state.start_time)}",
-        f"🗂 в кэше: {stats['cached']}",
-        f"🗑 удалённых сохранено: {stats['deleted']}",
-        f"✏️ правок: {stats['edits']}",
-        f"🔇 мутов: {stats['mutes']}",
-        f"🔒 перехвачено: {stats['intercepted']}",
-        "",
-    ]
-    if state.dnd_active(user_id):
-        spent = fmt.uptime(time.time() - state.dnd_since(user_id))
-        lines.append(f"🌙 **Не беспокоить: включён** (уже {spent})")
-        lines.append(f"✅ в белом списке: {stats['allowed']}")
-        lines.append("")
+    activity = await db.activity(user_id)
+    lines = ["📊 **Состояние**", ""]
 
     connection_id = state.business_of(user_id)
     if connection_id:
-        lines.append("🔗 **Подключено к личным чатам**")
+        lines.append("🔗 Личные чаты: **подключены**")
         lines.append(rights_report(state.rights_of(connection_id)))
     else:
-        lines.append("🔌 **Не подключено.** Инструкция — /connect")
-        lines.append("_Если подключение есть, напишите что-нибудь в личном чате — "
-                     "я его перечитаю._")
+        lines.append("🔌 Личные чаты: **не подключены** — /connect")
+        lines.append("_Если подключение есть, напишите что-нибудь в любой "
+                     "переписке: я его подхвачу._")
+    lines.append("")
+
+    if state.dnd_active(user_id):
+        spent = fmt.uptime(time.time() - state.dnd_since(user_id))
+        lines.append(f"🌙 Не беспокоить: **включён** (уже {spent}) — /ungmute")
+        lines.append("_Пока включён, входящие удаляются сразу, поэтому отчётов "
+                     "об удалении не будет._")
+    else:
+        lines.append("🌙 Не беспокоить: выключен")
+
+    ignored = [row for row in await db.tuned_chats(user_id) if row["ignored"]]
+    if ignored:
+        lines.append(f"🙈 Чатов в игноре: **{len(ignored)}** — /chats")
+    if stats["mutes"]:
+        lines.append(f"🔇 Замучено: **{stats['mutes']}** — /mutes")
+
+    lines.append("")
+    lines.append(f"🗑 Сохранено удалённых: **{stats['deleted']}**")
+    if activity["last_report"]:
+        lines.append(f"   последнее — {fmt.ts(activity['last_report'])}")
+    if stats["intercepted"]:
+        lines.append(f"🔒 Перехвачено: **{stats['intercepted']}** — /intercepted")
 
     if state.is_admin(user_id):
-        lines += ["", f"👥 пользователей: {stats['users']}",
-                  f"💾 база целиком: {fmt.size(stats['size'])}"]
+        lines += ["", "— — —",
+                  f"👥 пользователей: {stats['users']}",
+                  f"💾 база: {fmt.size(stats['size'])}",
+                  f"⏱ бот на связи: {fmt.uptime(time.time() - state.start_time)}"]
         if state.client is not None:
-            lines.append("👤 Юзербот-режим активен: работают и групповые чаты.")
+            lines.append("👤 юзербот-режим активен: работают и групповые чаты")
     await api.send_message(chat_id, "\n".join(lines))
+
+
+async def cmd_chats(api, message: dict, _args: str) -> None:
+    user_id = (message.get("from") or {}).get("id")
+    await api.send_message(message["chat"]["id"], await dotcmd.chats_text(user_id))
 
 
 async def cmd_deleted(api, message: dict, args: str) -> None:
@@ -428,14 +429,11 @@ ADMIN_ONLY = {"users", "revoke", "backup"}
 
 HANDLERS = {
     "start": cmd_start,
-    "menu": cmd_menu,
-    "settings": cmd_menu,
-    "why": cmd_why,
-    "debug": cmd_why,
     "connect": cmd_connect,
     "help": cmd_help,
     "status": cmd_status,
     "stats": cmd_status,
+    "chats": cmd_chats,
     "gmute": cmd_gmute,
     "dnd": cmd_gmute,
     "ungmute": cmd_ungmute,
@@ -478,10 +476,10 @@ async def restore_from_document(api, message: dict) -> None:
         info = await api.get_file(document["file_id"])
         config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         incoming.write_bytes(await api.download(info["file_path"]))
-    except Exception as e:                                   # noqa: BLE001
+    except Exception:                                        # noqa: BLE001
         log.exception("скачивание бэкапа не удалось")
         incoming.unlink(missing_ok=True)
-        await api.send_message(chat_id, f"⚠️ Не вышло скачать: `{type(e).__name__}`")
+        await api.send_message(chat_id, "⚠️ Не вышло скачать файл.")
         return
 
     # Подменяем базу только после проверки: иначе чужой файл уничтожит рабочую.
@@ -498,13 +496,13 @@ async def restore_from_document(api, message: dict) -> None:
         incoming.replace(config.DB_PATH)
         await db.init()
         await reload_state()
-    except Exception as e:                                   # noqa: BLE001
+    except Exception:                                        # noqa: BLE001
         log.exception("восстановление не удалось")
         if previous.exists():
             previous.replace(config.DB_PATH)
         await db.init()
         await reload_state()
-        await api.send_message(chat_id, f"⚠️ Не вышло: `{type(e).__name__}`. "
+        await api.send_message(chat_id, "⚠️ Не вышло восстановить. "
                                         "Прежняя база на месте.")
         return
     finally:
@@ -557,11 +555,12 @@ async def handle(api, message: dict) -> None:
 
     try:
         await handler(api, message, match.group(2) or "")
-    except Exception as e:                                   # noqa: BLE001
+    except Exception:                                        # noqa: BLE001
         log.exception("ошибка команды /%s", name)
         try:
             await api.send_message(message["chat"]["id"],
-                                   f"⚠️ `{type(e).__name__}: {e}`")
+                                   f"⚠️ Не получилось выполнить /{name}. "
+                                   "Попробуйте ещё раз.")
         except Exception:
             pass
 
@@ -583,91 +582,14 @@ async def _access_callback(api, query: dict, match: re.Match) -> None:
         log.debug("карточку заявки не удалось обновить: %r", e)
 
 
-async def _quick_action(api, owner_id: int, data: str) -> tuple[str, dict | None]:
-    """Кнопки под карточкой отчёта. Возвращает (всплывашка, новая клавиатура)."""
-    parts = data.split(":")
-    if parts[0] == "q" and len(parts) == 3:
-        chat_id, user_id = int(parts[1]), int(parts[2])
-        await state.mute_user(owner_id, chat_id, user_id, 0)
-        return "Замучен: сообщения будут удаляться", ui.markup(
-            [ui.button("🔊 Снять мут", f"mu:{chat_id}:{user_id}")])
-    if parts[0] == "qi" and len(parts) == 2:
-        chat_id = int(parts[1])
-        await chatprefs.toggle(owner_id, chat_id, "ignored", True)
-        return "Чат в игноре: больше ничего оттуда не присылаю", ui.markup(
-            [ui.button("↩️ Вернуть чат", f"ch:{chat_id}")])
-    return "", None
-
-
-async def _screen_action(api, owner_id: int, data: str) -> tuple[str, str, str]:
-    """Действие из панели. Возвращает (экран, аргумент, всплывашка)."""
-    parts = data.split(":")
-    kind = parts[0]
-
-    if kind == "m":
-        return (parts[1] if len(parts) > 1 else "home",
-                parts[2] if len(parts) > 2 else "", "")
-    if kind == "dnd":
-        if parts[1] == "on":
-            await state.set_dnd(owner_id)
-            return "dnd", "", "Включено"
-        since = state.dnd_since(owner_id)
-        await state.clear_dnd(owner_id)
-        await dotcmd.dnd_digest(owner_id, since)
-        return "dnd", "", "Выключено"
-    if kind == "mu":
-        chat_id, user_id = int(parts[1]), int(parts[2])
-        await state.unmute_user(owner_id, chat_id, user_id)
-        await state.unmute_user(owner_id, 0, user_id)
-        return "mutes", "", "Мут снят"
-    if kind == "al":
-        await state.deny_user(owner_id, int(parts[1]))
-        return "allow", "", "Убран из белого списка"
-    if kind == "ch":
-        await chatprefs.reset(owner_id, int(parts[1]))
-        return "chats", "", "Чат работает как раньше"
-    return "", "", ""          # незнакомая кнопка: молча закрываем всплывашку
-
-
 async def handle_callback(api, query: dict) -> None:
+    """Кнопки есть только у заявок на доступ — больше бот ими не управляется."""
     data = query.get("data") or ""
-    user_id = (query.get("from") or {}).get("id")
-    origin = query.get("message") or {}
-
-    access_match = ACCESS_RE.match(data)
-    if access_match is not None:
-        await _access_callback(api, query, access_match)
+    match = ACCESS_RE.match(data)
+    if match is None:
+        await api.answer_callback(query["id"])
         return
-
-    if not state.is_approved(user_id):
-        await api.answer_callback(query["id"], "Доступ к боту не открыт.",
-                                  show_alert=True)
-        return
-
-    try:
-        if data.startswith(("q:", "qi:")):
-            toast, keyboard = await _quick_action(api, user_id, data)
-            await api.answer_callback(query["id"], toast)
-            if keyboard is not None and origin:
-                await api.edit_message_reply_markup(
-                    origin["chat"]["id"], origin["message_id"], keyboard)
-            return
-
-        screen, arg, toast = await _screen_action(api, user_id, data)
-        await api.answer_callback(query["id"], toast)
-        if not screen:
-            return
-        text, keyboard = await ui.render(user_id, screen, arg)
-        if origin:
-            await api.edit_message_text(origin["chat"]["id"], origin["message_id"],
-                                        text, reply_markup=keyboard)
-    except Exception as e:                                   # noqa: BLE001
-        log.exception("кнопка %r не сработала", data)
-        try:
-            await api.answer_callback(query["id"], f"Ошибка: {type(e).__name__}",
-                                      show_alert=True)
-        except Exception:
-            pass
+    await _access_callback(api, query, match)
 
 
 async def publish_menu(api) -> None:

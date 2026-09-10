@@ -143,7 +143,17 @@ def test_status_lists_rights_when_connected():
     connected()
     api = run("/status")
     text = api.texts[0]
-    assert "Подключено" in text and "удалять сообщения собеседника" in text
+    assert "подключены" in text and "удалять сообщения собеседника" in text
+
+
+def test_status_explains_a_silent_bot_in_plain_words():
+    """Диагностика осталась, но обычным текстом, без отдельной команды."""
+    connected()
+    asyncio.run(state.set_dnd(OWNER))
+    text = run("/status").texts[-1]
+    assert "Не беспокоить: **включён**" in text
+    assert "отчётов об удалении не будет" in text
+    assert "/ungmute" in text
 
 
 def test_status_without_connection_points_to_connect():

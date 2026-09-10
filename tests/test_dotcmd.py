@@ -174,14 +174,17 @@ def test_unknown_command_is_ignored():
     assert api.sent == [] and api.deleted == []
 
 
-def test_handler_error_is_reported_not_raised():
+def test_handler_error_is_reported_without_python_details():
+    """Постороннему человеку имя исключения ничего не говорит."""
     @dotcmd.bizcmd("boom", desc="тест")
     async def _boom(_ctx):
         raise ValueError("сломалось")
 
     try:
         api = run(".boom", message_id=91)
-        assert any("ValueError" in text for text in api.texts_to(OWNER_CHAT))
+        answer = api.texts_to(OWNER_CHAT)[-1]
+        assert "Не получилось выполнить" in answer
+        assert "ValueError" not in answer and "сломалось" not in answer
     finally:
         dotcmd.REGISTRY.pop("boom", None)
         dotcmd.COMMANDS[:] = [c for c in dotcmd.COMMANDS if c.name != "boom"]
@@ -191,24 +194,26 @@ def test_handler_error_is_reported_not_raised():
 # Главная жалоба была не про логику, а про то, что непонятно, как выключить.
 # Поэтому каждое включение приходит сразу с кнопкой обратного действия.
 
-def markup_buttons(api) -> list[str]:
-    return [b["callback_data"]
-            for markup in api.markups if markup
-            for row in markup["inline_keyboard"] for b in row]
-
-
-def test_gmute_confirmation_carries_the_off_switch():
+def test_gmute_confirmation_says_how_to_switch_it_off():
     api = run(".gmute", message_id=100)
-    assert "dnd:off" in markup_buttons(api)
-    assert "m:home" in markup_buttons(api)
+    answer = api.texts_to(OWNER_CHAT)[-1]
+    assert "ungmute" in answer
 
 
-def test_ignore_explains_itself_and_offers_the_way_back():
+def test_ignore_explains_itself_and_the_way_back():
     api = run(".ignore", message_id=101)
     answer = api.texts_to(OWNER_CHAT)[-1]
     assert "Игнорирование чата" in answer and "включено" in answer
-    assert "Ничего не удаляется" in answer, "игнор — это про молчание, не про удаление"
-    assert f"ch:{PEER}" in markup_buttons(api), "вернуть можно кнопкой"
+    assert "Ничего не удаляется" in answer, "игнор — про молчание, не про удаление"
+    assert ".ignore off" in answer and "/chats" in answer
+
+
+def test_chats_lists_what_was_changed():
+    run(".ignore", message_id=103)
+    api = run(".chats", message_id=104)
+    listing = api.texts_to(OWNER_CHAT)[-1]
+    assert "игнорирую полностью" in listing
+    assert ".ignore off" in listing
 
 
 def test_ignore_remembers_the_chat_name():
