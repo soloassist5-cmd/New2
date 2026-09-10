@@ -260,6 +260,15 @@ async def why(owner_id: int) -> tuple[str, dict]:
 
     stats = await db.activity(owner_id)
     lines.append("")
+
+    # Бот работает на сервере и от того, онлайн ли владелец, не зависит.
+    # Зависит он от собственного времени работы: во время простоя хостинга
+    # события Telegram проходят мимо.
+    alive = time.time() - state.start_time
+    lines.append(f"⏱ На связи без перерыва: **{fmt.uptime(alive)}**.")
+    if alive < 600:
+        lines.append("   _Только что перезапускался — то, что он видел до "
+                     "перезапуска, могло не попасть в последнюю копию базы._")
     if stats["cached"]:
         word = fmt.plural(stats["cached"],
                           ("сообщением", "сообщениями", "сообщениями"))

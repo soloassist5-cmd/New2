@@ -283,3 +283,17 @@ def test_intercepted_screen_lists_and_paginates():
     press("m:muted:0")
     assert "Перехвачено" in state.api.edits[-1][2]
     assert "m:muted:8" in screen_buttons(state.api)
+
+
+def test_why_reports_its_own_uptime():
+    """Бот не зависит от того, онлайн ли владелец, — но зависит от себя."""
+    state.start_time = __import__("time").time() - 7200
+    press("m:why")
+    assert "На связи без перерыва" in state.api.edits[-1][2]
+    assert "перезапускался" not in state.api.edits[-1][2]
+
+
+def test_why_warns_right_after_a_restart():
+    state.start_time = __import__("time").time() - 30
+    press("m:why")
+    assert "Только что перезапускался" in state.api.edits[-1][2]
