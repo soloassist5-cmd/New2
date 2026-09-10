@@ -14,8 +14,11 @@ def run(coro):
 @pytest.fixture(autouse=True)
 def fresh_db():
     import config
+    from modules.antidelete import invalidate_all
+
     config.DB_PATH.unlink(missing_ok=True)
     run(db.init())
+    invalidate_all()
     yield
     run(db.close())
 

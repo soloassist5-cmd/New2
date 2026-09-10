@@ -1,4 +1,16 @@
-"""Точка входа: Telegram Guard (юзербот на Telethon)."""
+"""Точка входа.
+
+Два независимых режима, любой можно включить отдельно:
+
+* **Telegram Business** (нужен только BOT_TOKEN) — бот, подключённый в
+  Настройки → Telegram Business → Чат-боты, получает события личных чатов,
+  включая удаления. Ни строки сессии, ни API-ключей не требуется.
+* **Юзербот** (SESSION + API_ID/API_HASH) — MTProto-клиент от вашего аккаунта:
+  работает и в группах, но это серая зона правил Telegram.
+
+Если заданы оба, они дополняют друг друга: бот отвечает за личные чаты и
+доставку отчётов, юзербот — за группы.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -7,15 +19,12 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-
 import config
 import db
 import health
-import modules
+from bot import business, commands, poller
+from bot.api import BotAPI
 from core import backup, dispatcher, fmt, reporter, state
-from modules import botui
 
 LOG_FILE = config.ROOT / "data" / "guard.log"
 
@@ -37,43 +46,79 @@ def setup_logging() -> None:
 log = logging.getLogger("main")
 
 
-async def resolve_log_chat(client) -> None:
+async def start_userbot():
+    """Поднимает MTProto-клиент, если задана строка сессии."""
+    if not config.userbot_enabled():
+        if config.SESSION:
+            log.error("SESSION задан, но нет API_ID/API_HASH — юзербот выключен")
+        return None
+
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    import modules
+
+    client = TelegramClient(
+        StringSession(config.SESSION), config.API_ID, config.API_HASH,
+        connection_retries=None, retry_delay=5, auto_reconnect=True,
+        device_model="Guard", system_version="1.0", app_version="1.0",
+    )
+    await client.connect()
+    if not await client.is_user_authorized():
+        log.error("SESSION недействителен или отозван. Сгенерируйте новый: "
+                  "python scripts/gen_session.py")
+        await client.disconnect()
+        return None
+
+    state.client = client
+    state.me = await client.get_me()
+    state.owner_id = state.owner_id or state.me.id
+    log.info("юзербот: вошли как %s (id %s)", fmt.name_of(state.me), state.me.id)
+
     try:
         state.log_entity = await client.get_entity(config.LOG_CHAT)
-        log.info("лог-чат: %s", fmt.name_of(state.log_entity))
     except Exception as e:                                   # noqa: BLE001
-        log.error("не удалось открыть LOG_CHAT=%r (%r) — падаю на «Избранное»",
-                  config.LOG_CHAT, e)
+        log.warning("LOG_CHAT=%r недоступен (%r) — использую «Избранное»",
+                    config.LOG_CHAT, e)
         try:
             state.log_entity = await client.get_entity("me")
         except Exception:
             state.log_entity = None
 
+    dispatcher.setup(client)
+    modules.setup_all(client)
+    log.info("команд юзербота: %s", len(dispatcher.COMMANDS))
+    return client
 
-async def start_bot() -> None:
-    """Поднимает бота-почтальона, если задан BOT_TOKEN."""
-    if not config.report_via_bot():
-        log.info("BOT_TOKEN не задан — отчёты пойдут в LOG_CHAT от вашего аккаунта")
-        return
-    bot = TelegramClient(StringSession(), config.API_ID, config.API_HASH)
-    await bot.start(bot_token=config.BOT_TOKEN)
-    state.bot = bot
-    state.owner_id = config.OWNER_ID or (state.me.id if state.me else 0)
 
-    botui.setup_bot(bot)
-    await botui.publish_menu(bot)
+async def start_bot():
+    """Поднимает Bot API-клиент и восстанавливает бизнес-подключения."""
+    if not config.BOT_TOKEN:
+        log.info("BOT_TOKEN не задан — режим Business выключен")
+        return None
 
-    known = await reporter.resolve_owner()
-    me_bot = await bot.get_me()
-    log.info("бот @%s готов, владелец %s%s", me_bot.username, state.owner_id,
-             "" if known else " (ждёт вашего /start)")
+    api = BotAPI(config.BOT_TOKEN)
+    await api.start()
+    state.api = api
+    state.bot_user = await api.get_me()
+    log.info("бот @%s готов", state.bot_user.get("username"))
+
+    await business.load_connections()
+    if config.OWNER_ID:
+        state.owner_id = config.OWNER_ID
+        state.owner_chat_id = state.owner_chat_id or config.OWNER_ID
+    await commands.publish_menu(api)
+
+    if not state.business:
+        log.info("бизнес-подключений нет: откройте чат с ботом и нажмите Start")
+    return api
 
 
 async def announce_restart() -> None:
     """Дописывает «перезапущен» к сообщению, из которого вызвали .restart."""
     chat = await db.kv_get("restart_chat")
     msg_id = await db.kv_get("restart_msg")
-    if not chat or not msg_id:
+    if not chat or not msg_id or state.client is None:
         return
     try:
         await state.client.edit_message(int(chat), int(msg_id), "♻️ **Перезапущен.**")
@@ -84,36 +129,30 @@ async def announce_restart() -> None:
         await db.kv_set("restart_msg", "")
 
 
+def describe_modes() -> str:
+    modes = []
+    if state.api is not None:
+        connected = sum(1 for i in state.business.values() if i.get("is_enabled"))
+        modes.append(f"бот @{(state.bot_user or {}).get('username', '?')}"
+                     + (f", подключений Business: {connected}" if connected
+                        else ", ожидает подключения"))
+    if state.client is not None:
+        modes.append(f"юзербот {fmt.name_of(state.me)}")
+    return " · ".join(modes) or "нет активных режимов"
+
+
 async def run() -> None:
     problems = config.validate()
     if problems:
         for item in problems:
             log.error("конфигурация: %s", item)
-        log.error("Заполните .env (пример — .env.example) и запустите снова.")
+        log.error("Заполните .env — пример со всеми полями лежит в .env.example")
         sys.exit(1)
 
     state.start_time = time.time()
-    client = TelegramClient(
-        StringSession(config.SESSION), config.API_ID, config.API_HASH,
-        connection_retries=None,      # бесконечные переподключения
-        retry_delay=5,
-        auto_reconnect=True,
-        device_model="Guard", system_version="1.0", app_version="1.0",
-    )
-    state.client = client
+    client = await start_userbot()
 
-    await client.connect()
-    if not await client.is_user_authorized():
-        log.error("SESSION недействителен или отозван. Сгенерируйте новый: "
-                  "python scripts/gen_session.py")
-        await client.disconnect()
-        sys.exit(1)
-    state.me = await client.get_me()
-    log.info("вошли как %s (id %s)", fmt.name_of(state.me), state.me.id)
-
-    await resolve_log_chat(client)
-
-    if config.RESTORE_ON_START and not config.DB_PATH.exists():
+    if config.RESTORE_ON_START and not config.DB_PATH.exists() and client is not None:
         log.info("базы нет — пробую восстановить из лог-чата")
         await backup.restore()
 
@@ -121,33 +160,39 @@ async def run() -> None:
     await state.load_mutes()
     log.info("мутов загружено: %s", len(state.mutes))
 
-    dispatcher.setup(client)
-    modules.setup_all(client)
-    log.info("команд зарегистрировано: %s", len(dispatcher.COMMANDS))
-
-    await start_bot()
+    api = await start_bot()
+    if client is None and api is None:
+        log.error("не удалось запустить ни один режим")
+        sys.exit(1)
 
     runner = await health.start()
-    task = asyncio.create_task(backup.loop())
+    tasks = [asyncio.create_task(backup.loop())]
+    stop = asyncio.Event()
+    if api is not None:
+        tasks.append(asyncio.create_task(poller.run(api, stop)))
 
     await announce_restart()
-    where = "через бота" if state.bot is not None else "в лог-чат"
+    log.info("режимы: %s", describe_modes())
     await reporter.send_report(
         f"🛡 **Guard запущен**\n"
-        f"👤 {fmt.name_of(state.me)} (`{state.me.id}`)\n"
-        f"⌨️ префикс `{config.PREFIX}` · команд {len(dispatcher.COMMANDS)}\n"
-        f"🔇 мутов восстановлено: {len(state.mutes)}\n"
-        f"📨 отчёты идут {where}"
+        f"{describe_modes()}\n"
+        f"⌨️ префикс `{config.PREFIX}`\n"
+        f"🔇 мутов восстановлено: {len(state.mutes)}"
     )
 
     try:
-        await client.run_until_disconnected()
+        if client is not None:
+            await client.run_until_disconnected()
+        else:
+            await stop.wait()
     finally:
-        task.cancel()
+        stop.set()
+        for task in tasks:
+            task.cancel()
         if runner is not None:
             await runner.cleanup()
-        if state.bot is not None:
-            await state.bot.disconnect()
+        if api is not None:
+            await api.close()
         await db.close()
 
 

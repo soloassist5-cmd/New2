@@ -1,0 +1,97 @@
+"""Заглушка Bot API: пишет всё, что бот попытался отправить."""
+from __future__ import annotations
+
+import itertools
+
+
+class FakeBotAPI:
+    def __init__(self, *, delete_ok: bool = True):
+        self.sent: list[tuple[int, str, str | None]] = []      # (chat_id, text, biz)
+        self.edits: list[tuple[int, int, str]] = []
+        self.media: list[tuple[int, str, str | None, str | None]] = []
+        self.files: list[tuple[int, str]] = []
+        self.deleted: list[tuple[str, list[int]]] = []
+        self.commands: list[dict] | None = None
+        self.delete_ok = delete_ok
+        self.downloads: dict[str, bytes] = {}
+        self._ids = itertools.count(1000)
+
+    async def send_message(self, chat_id, text, *, business_connection_id=None,
+                           reply_to=None):
+        self.sent.append((chat_id, text, business_connection_id))
+        return {"message_id": next(self._ids)}
+
+    async def edit_message_text(self, chat_id, message_id, text, *,
+                                business_connection_id=None):
+        self.edits.append((chat_id, message_id, text))
+        return {"message_id": message_id}
+
+    async def send_media(self, chat_id, file_id, media_type, *, caption=None,
+                         business_connection_id=None):
+        self.media.append((chat_id, file_id, media_type, caption))
+        return {"message_id": next(self._ids)}
+
+    async def send_file(self, chat_id, data, filename, *, caption=None):
+        self.files.append((chat_id, filename))
+        return {"message_id": next(self._ids)}
+
+    async def delete_business_messages(self, business_connection_id, message_ids):
+        if not self.delete_ok:
+            raise RuntimeError("Bad Request: not enough rights")
+        self.deleted.append((business_connection_id, list(message_ids)))
+        return True
+
+    async def set_my_commands(self, commands):
+        self.commands = commands
+        return True
+
+    async def get_file(self, file_id):
+        return {"file_id": file_id, "file_path": f"documents/{file_id}"}
+
+    async def download(self, file_path):
+        return self.downloads.get(file_path, b"")
+
+    # ------------------------------------------------------------ помощь --
+    @property
+    def texts(self) -> list[str]:
+        return [text for _, text, _ in self.sent]
+
+    def texts_to(self, chat_id: int) -> list[str]:
+        return [text for cid, text, _ in self.sent if cid == chat_id]
+
+    @property
+    def all_deleted_ids(self) -> list[int]:
+        return [mid for _, ids in self.deleted for mid in ids]
+
+
+ALL_RIGHTS = {
+    "can_read_messages": True,
+    "can_reply": True,
+    "can_delete_sent_messages": True,
+    "can_delete_all_messages": True,
+}
+
+
+def business_message(text="", *, message_id=10, chat_id=777, from_id=777,
+                     connection_id="biz1", first_name="Собеседник", reply_to=None,
+                     photo=None, date=1700000000):
+    """Апдейт business_message в формате Bot API."""
+    message = {
+        "message_id": message_id,
+        "date": date,
+        "business_connection_id": connection_id,
+        "chat": {"id": chat_id, "type": "private", "first_name": "Чат"},
+        "from": {"id": from_id, "first_name": first_name},
+        "text": text,
+    }
+    if reply_to is not None:
+        message["reply_to_message"] = {
+            "message_id": reply_to["message_id"],
+            "from": reply_to.get("from", {"id": from_id, "first_name": first_name}),
+        }
+    if photo is not None:
+        message.pop("text", None)
+        message["caption"] = text
+        message["photo"] = [{"file_id": photo, "width": 90},
+                            {"file_id": photo, "width": 1280}]
+    return message

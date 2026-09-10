@@ -1,4 +1,5 @@
-# Fly.io: fly launch --no-deploy, затем секреты через `fly secrets set`.
+# Fly.io: fly launch --no-deploy, затем `fly secrets set BOT_TOKEN=...`.
+# Здесь есть постоянный том, поэтому база переживает передеплой сама.
 app = "tg-guard"
 primary_region = "fra"
 

@@ -10,15 +10,15 @@ services:
     autoDeploy: true
     healthCheckPath: /health
     envVars:
+      # Обязательный: токен из @BotFather.
+      - key: BOT_TOKEN
+        sync: false
+      # Необязательные — только если нужен ещё и режим юзербота.
       - key: API_ID
         sync: false
       - key: API_HASH
         sync: false
       - key: SESSION
-        sync: false
-      - key: BOT_TOKEN
-        sync: false
-      - key: LOG_CHAT
         sync: false
       - key: PREFIX
         value: "."

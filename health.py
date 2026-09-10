@@ -17,15 +17,18 @@ log = logging.getLogger("health")
 
 
 async def _status(_request: web.Request) -> web.Response:
-    connected = bool(state.client and state.client.is_connected())
+    connected = bool(state.api) or bool(state.client and state.client.is_connected())
     return web.json_response({
         "status": "ok" if connected else "starting",
         "connected": connected,
         "uptime_sec": int(time.time() - state.start_time),
         "mutes": len(state.mutes),
         "afk": state.afk_since is not None,
-        "bot": bool(state.bot),
-        "bot_reachable": bool(state.bot) and not state.bot_blocked,
+        "bot": bool(state.api),
+        "bot_reachable": bool(state.api) and not state.bot_blocked,
+        "business_connections": sum(1 for i in state.business.values()
+                                    if i.get("is_enabled")),
+        "userbot": bool(state.client),
     }, status=200 if connected else 503)
 
 

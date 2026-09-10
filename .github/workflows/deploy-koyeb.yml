@@ -1,6 +1,7 @@
 # Автодеплой на Koyeb при пуше в main.
-# Разово в дашборде Koyeb: Secrets -> создать api-id, api-hash, tg-session,
-# bot-token, log-chat.
+# Разово в дашборде Koyeb: Secrets -> создать bot-token (обязательно).
+# Секреты api-id / api-hash / tg-session нужны только для режима юзербота —
+# без них сервис работает в режиме Telegram Business.
 # В GitHub: Settings -> Secrets -> Actions -> KOYEB_TOKEN.
 name: Deploy · Koyeb
 
@@ -34,10 +35,6 @@ jobs:
           # @имя — ссылка на секрет Koyeb, значения в репозиторий не попадают
           service-env: >-
             PORT=8080,
-            API_ID=@api-id,
-            API_HASH=@api-hash,
-            SESSION=@tg-session,
             BOT_TOKEN=@bot-token,
-            LOG_CHAT=@log-chat,
             BACKUP_EVERY_MIN=30,
             RESTORE_ON_START=1

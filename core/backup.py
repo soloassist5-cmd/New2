@@ -36,7 +36,7 @@ async def make_backup() -> Path | None:
 
 
 async def upload() -> bool:
-    if state.log_entity is None:
+    if state.log_entity is None and state.api is None:
         return False
     tmp = await make_backup()
     if tmp is None:
@@ -46,9 +46,17 @@ async def upload() -> bool:
         caption = (f"{config.BACKUP_TAG}\n🗄 Бэкап базы · {fmt.ts(db.now())}\n"
                    f"кэш {stats['cached']} · удалённых {stats['deleted']} · "
                    f"размер {fmt.size(stats['size'])}")
-        await state.client.send_file(state.log_entity, tmp, caption=caption,
-                                     force_document=True)
-        await _prune()
+        if state.log_entity is not None:
+            await state.client.send_file(state.log_entity, tmp, caption=caption,
+                                         force_document=True)
+            await _prune()
+            return True
+        # Режим Business: юзербота нет, копию присылает бот. Чтобы поднять её
+        # обратно после передеплоя, достаточно переслать файл боту.
+        await state.api.send_file(
+            state.owner_chat_id, tmp.read_bytes(), "guard.sqlite3",
+            caption=caption + "\n\n_Перешлите этот файл боту, чтобы восстановить "
+                    "базу после передеплоя._")
         return True
     except Exception as e:                                   # noqa: BLE001
         log.error("не удалось отправить бэкап: %r", e)

@@ -24,6 +24,12 @@ def invalidate(chat_id: int) -> None:
     _settings.pop(chat_id, None)
 
 
+def invalidate_all() -> None:
+    """Сбрасывает кэш настроек — например, после восстановления базы."""
+    _settings.clear()
+    _names.clear()
+
+
 async def flags(chat_id: int, is_private: bool) -> dict:
     cached = _settings.get(chat_id)
     if cached is not None:

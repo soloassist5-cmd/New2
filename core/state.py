@@ -10,10 +10,26 @@ client = None            # TelegramClient юзербота, выставляет
 me = None                # telethon User — владелец аккаунта
 log_entity = None        # чат-хранилище копий медиа
 
-bot = None               # TelegramClient бота из @BotFather (может отсутствовать)
-owner_id: int = 0        # кому бот шлёт отчёты
-owner_peer = None        # разрешённый peer владельца для бота
-bot_blocked: bool = False  # владелец ещё не нажал /start — предупреждаем один раз
+api = None               # bot.api.BotAPI — бот из @BotFather (может отсутствовать)
+bot_user: dict | None = None      # результат getMe
+owner_id: int = 0        # владелец: кому уходят отчёты
+owner_chat_id: int = 0   # его личка с ботом
+bot_blocked: bool = False  # бот не может писать владельцу — предупреждаем один раз
+
+# Подключения Telegram Business: connection_id -> {user_id, rights, is_enabled}
+business: dict[str, dict] = {}
+
+
+def business_for(user_id: int) -> str | None:
+    """Активное бизнес-подключение владельца, если оно есть."""
+    for connection_id, info in business.items():
+        if info.get("user_id") == user_id and info.get("is_enabled"):
+            return connection_id
+    return None
+
+
+def rights_of(connection_id: str | None) -> dict:
+    return (business.get(connection_id) or {}).get("rights") or {}
 
 start_time: float = time.time()
 

@@ -83,12 +83,16 @@ def report_via_bot() -> bool:
     return bool(BOT_TOKEN)
 
 
+def userbot_enabled() -> bool:
+    return bool(SESSION and API_ID and API_HASH)
+
+
 def validate() -> list[str]:
+    """Хотя бы один режим должен быть настроен."""
     problems = []
-    if not API_ID:
-        problems.append("API_ID не задан")
-    if not API_HASH:
-        problems.append("API_HASH не задан")
-    if not SESSION:
-        problems.append("SESSION не задан (сгенерируйте: python scripts/gen_session.py)")
+    if not BOT_TOKEN and not SESSION:
+        problems.append(
+            "нужен BOT_TOKEN (режим Telegram Business) или SESSION (режим юзербота)")
+    if SESSION and not (API_ID and API_HASH):
+        problems.append("для SESSION нужны также API_ID и API_HASH с my.telegram.org")
     return problems
