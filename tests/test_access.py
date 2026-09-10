@@ -225,10 +225,14 @@ def test_approved_connection_gets_the_welcome():
     assert any("подключён" in text for text in state.api.texts_to(STRANGER))
 
 
-def test_no_admin_configured_is_explained():
+def test_no_admin_configured_shows_your_own_id():
+    """Без OWNER_ID бот молчит для всех — и это ровно тот момент,
+    когда человеку нужен собственный id, чтобы его вписать."""
     config.OWNER_ID = 0
     api = run("/start", from_id=STRANGER)
-    assert any("OWNER_ID" in text for text in api.texts_to(STRANGER))
+    answer = api.texts_to(STRANGER)[0]
+    assert f"OWNER_ID={STRANGER}" in answer, "готовая строка для копирования"
+    assert str(STRANGER) in answer
 
 
 def test_pending_request_survives_a_restart():

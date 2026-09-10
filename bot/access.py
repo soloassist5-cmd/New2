@@ -31,8 +31,11 @@ APPROVED = (
     "Отправьте /start, чтобы начать."
 )
 NO_ADMIN = (
-    "🔐 Доступ к боту закрыт: владелец не настроил приём заявок.\n"
-    "_Администратору: задайте переменную окружения_ `OWNER_ID`."
+    "🔐 **Доступ к боту закрыт: администратор не назначен.**\n\n"
+    "Ваш Telegram id: `{user_id}`\n\n"
+    "_Если бот ваш — добавьте в переменные окружения_ `OWNER_ID={user_id}` "
+    "_и перезапустите. Доступ откроется сам, а заявки от других людей будут "
+    "приходить вам._"
 )
 
 
@@ -67,8 +70,9 @@ async def request(api, user: dict, *, source: str, chat_id: int | None = None) -
                                     chat_id=chat_id)
 
     if not config.OWNER_ID:
+        # Ровно тот момент, когда человеку нужен собственный id, — показываем его.
         log.warning("заявка от %s, но OWNER_ID не задан — решать некому", user_id)
-        return NO_ADMIN
+        return NO_ADMIN.format(user_id=user_id)
     if row.get("status") == db.DENIED:
         return DENIED
     if known is not None and known["status"] == db.PENDING:
