@@ -140,12 +140,23 @@ class BotAPI:
         return await self.call(method, **params)
 
     async def send_file(self, chat_id: int, data: bytes, filename: str, *,
-                        caption: str | None = None) -> dict:
+                        caption: str | None = None) -> dict:      # noqa: D401
         return await self.upload(
             "sendDocument", "document", data, filename, chat_id=chat_id,
             caption=markup.trim(markup.to_html(caption), CAPTION_LIMIT) if caption else None,
             parse_mode="HTML" if caption else None,
         )
+
+    async def get_chat(self, chat_id: int) -> dict:
+        return await self.call("getChat", chat_id=chat_id)
+
+    async def pin_message(self, chat_id: int, message_id: int) -> bool:
+        return await self.call("pinChatMessage", chat_id=chat_id,
+                               message_id=message_id, disable_notification=True)
+
+    async def unpin_message(self, chat_id: int, message_id: int) -> bool:
+        return await self.call("unpinChatMessage", chat_id=chat_id,
+                               message_id=message_id)
 
     async def get_business_connection(self, business_connection_id: str) -> dict:
         return await self.call("getBusinessConnection",

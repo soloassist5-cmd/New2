@@ -92,8 +92,8 @@ async def start_userbot():
     return client
 
 
-async def start_bot():
-    """Поднимает Bot API-клиент и восстанавливает бизнес-подключения."""
+async def connect_bot():
+    """Поднимает Bot API-клиент. Делается до базы: из него же её и восстанавливаем."""
     if not config.BOT_TOKEN:
         log.info("BOT_TOKEN не задан — режим Business выключен")
         return None
@@ -103,16 +103,38 @@ async def start_bot():
     state.api = api
     state.bot_user = await api.get_me()
     log.info("бот @%s готов", state.bot_user.get("username"))
+    return api
 
+
+async def configure_bot(api) -> None:
+    """Поднимает подключения и меню — уже после того, как база готова."""
     await business.load_connections()
     if config.OWNER_ID:
         state.owner_id = config.OWNER_ID
         state.owner_chat_id = state.owner_chat_id or config.OWNER_ID
     await commands.publish_menu(api)
-
     if not state.business:
-        log.info("бизнес-подключений нет: откройте чат с ботом и нажмите Start")
-    return api
+        log.info("бизнес-подключений нет: они подхватятся с первого же события "
+                 "из личных чатов")
+
+
+async def restore_database(client, api) -> None:
+    """Возвращает базу после передеплоя на хостинге с временным диском."""
+    if not config.RESTORE_ON_START or config.DB_PATH.exists():
+        return
+    if client is not None:
+        log.info("базы нет — пробую восстановить из лог-чата")
+        if await backup.restore():
+            return
+    if api is None:
+        return
+    if not config.OWNER_ID:
+        log.warning("базы нет, а OWNER_ID не задан — восстановить нечем. "
+                    "Укажите свой id в OWNER_ID, и бот будет поднимать базу "
+                    "из закреплённого бэкапа сам.")
+        return
+    log.info("базы нет — пробую восстановить из закреплённого бэкапа")
+    await backup.restore_from_pinned(api, config.OWNER_ID)
 
 
 async def start_transport(api, stop: asyncio.Event) -> list[asyncio.Task]:
@@ -173,10 +195,8 @@ async def run() -> None:
 
     state.start_time = time.time()
     client = await start_userbot()
-
-    if config.RESTORE_ON_START and not config.DB_PATH.exists() and client is not None:
-        log.info("базы нет — пробую восстановить из лог-чата")
-        await backup.restore()
+    api = await connect_bot()
+    await restore_database(client, api)
 
     await db.init()
     await state.load_mutes()
@@ -186,7 +206,8 @@ async def run() -> None:
              len(state.mutes), len(state.allowlist),
              "включён" if state.dnd_active() else "выключен")
 
-    api = await start_bot()
+    if api is not None:
+        await configure_bot(api)
     if client is None and api is None:
         log.error("не удалось запустить ни один режим")
         sys.exit(1)

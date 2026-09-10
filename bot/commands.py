@@ -42,14 +42,22 @@ WELCOME = (
 )
 
 NOT_CONNECTED = (
-    "Сначала подключите меня к личным чатам — команда /connect.\n"
-    "До этого мне не видно ни одного чата."
+    "🔌 **Пока не вижу подключения к вашим личным чатам.**\n\n"
+    "**Если ещё не подключали** — /connect, там пошаговая инструкция.\n\n"
+    "**Если подключали, а я забыл** — так бывает после обновления на хостинге "
+    "с временным диском. Ничего переподключать не нужно: напишите что-нибудь "
+    "в любом личном чате, и я перечитаю связку у Telegram сам."
 )
 
 ALREADY_LINKED_HINT = (
-    "\n\n_Если вы меня уже подключали, а я этого не вижу — так бывает после "
-    "передеплоя на хостинге с временным диском. Напишите что-нибудь в любом "
-    "личном чате: я перечитаю связку у Telegram и подхвачу её сам._"
+    "\n\n_Уже подключали, а я не вижу? Так бывает после обновления на хостинге. "
+    "Напишите что-нибудь в любом личном чате — связку я подхвачу сам._"
+)
+
+OWNER_ID_HINT = (
+    "\n\n⚙️ _Чтобы при обновлениях не терялся и журнал удалённых: добавьте в "
+    "переменные окружения_ `OWNER_ID={user_id}` _— тогда я буду поднимать базу "
+    "из закреплённого здесь бэкапа сам._"
 )
 
 HELP = (
@@ -106,6 +114,11 @@ def connected() -> bool:
 
 # ----------------------------------------------------------------- команды --
 
+def owner_id_hint(user_id: int) -> str:
+    """Без OWNER_ID база не переживает передеплой — подсказываем, где взять id."""
+    return "" if config.OWNER_ID else OWNER_ID_HINT.format(user_id=user_id)
+
+
 async def cmd_start(api, message: dict, _args: str) -> None:
     chat_id = message["chat"]["id"]
     user_id = (message.get("from") or {}).get("id")
@@ -113,12 +126,13 @@ async def cmd_start(api, message: dict, _args: str) -> None:
         state.owner_chat_id = chat_id
 
     if connected() and is_owner(user_id):
-        await api.send_message(chat_id, WELCOME + HELP.format(p=config.PREFIX))
+        await api.send_message(chat_id, WELCOME + HELP.format(p=config.PREFIX)
+                               + owner_id_hint(user_id))
         return
     await api.send_message(
         chat_id,
         WELCOME + CONNECT_STEPS.format(bot=bot_mention(), p=config.PREFIX)
-        + ALREADY_LINKED_HINT)
+        + ALREADY_LINKED_HINT + owner_id_hint(user_id))
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
@@ -444,7 +458,8 @@ async def handle(api, message: dict) -> None:
 
     if name not in PUBLIC:
         if not owner_known():
-            await api.send_message(message["chat"]["id"], NOT_CONNECTED)
+            await api.send_message(message["chat"]["id"],
+                                   NOT_CONNECTED + owner_id_hint(user_id))
             return
         if not is_owner(user_id):
             return                      # чужому отвечать нечего

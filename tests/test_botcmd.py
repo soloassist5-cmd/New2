@@ -100,7 +100,22 @@ def test_start_remembers_owner_chat():
 
 def test_data_commands_require_a_connection():
     api = run("/deleted")
-    assert "подключите" in api.texts[0].lower()
+    text = api.texts[0]
+    assert "/connect" in text
+    assert "напишите что-нибудь в любом личном чате" in text.lower(), \
+        "подсказка про самовосстановление важнее инструкции по подключению"
+
+
+def test_owner_id_hint_shown_only_when_it_is_not_set():
+    api = run("/deleted")
+    assert "OWNER_ID=111" in api.texts[0], "id подставлен, чтобы скопировать"
+
+    config.OWNER_ID = OWNER
+    try:
+        api = run("/deleted")
+        assert "OWNER_ID" not in api.texts[-1]
+    finally:
+        config.OWNER_ID = 0
 
 
 def test_stranger_gets_no_data():

@@ -51,18 +51,83 @@ async def upload() -> bool:
                                          force_document=True)
             await _prune()
             return True
-        # Режим Business: юзербота нет, копию присылает бот. Чтобы поднять её
-        # обратно после передеплоя, достаточно переслать файл боту.
-        await state.api.send_file(
-            state.owner_chat_id, tmp.read_bytes(), "guard.sqlite3",
-            caption=caption + "\n\n_Перешлите этот файл боту, чтобы восстановить "
-                    "базу после передеплоя._")
+        # Режим Business: юзербота нет, копию присылает и закрепляет бот.
+        # Закреплённое сообщение — единственное, что бот может прочитать у себя
+        # в личке при старте (getChat), поэтому именно оттуда база и поднимается
+        # после передеплоя на хостинге с временным диском.
+        sent = await state.api.send_file(
+            state.owner_chat_id, tmp.read_bytes(), BACKUP_NAME,
+            caption=caption + "\n\n_Это сообщение закреплено: из него база "
+                    "восстановится сама после передеплоя._")
+        await _repin(sent)
         return True
     except Exception as e:                                   # noqa: BLE001
         log.error("не удалось отправить бэкап: %r", e)
         return False
     finally:
         tmp.unlink(missing_ok=True)
+
+
+BACKUP_NAME = "guard.sqlite3"
+KV_PINNED = "pinned_backup"
+
+
+async def _repin(sent: dict | None) -> None:
+    """Закрепляет свежую копию и снимает закрепление с прошлой."""
+    if not sent or not sent.get("message_id"):
+        return
+    previous = await db.kv_get(KV_PINNED, "")
+    try:
+        await state.api.pin_message(state.owner_chat_id, sent["message_id"])
+        await db.kv_set(KV_PINNED, sent["message_id"])
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось закрепить бэкап: %r", e)
+        return
+    if previous:
+        try:
+            await state.api.unpin_message(state.owner_chat_id, int(previous))
+        except Exception as e:                               # noqa: BLE001
+            log.debug("старое закрепление не снялось: %r", e)
+
+
+async def restore_from_pinned(api, owner_chat_id: int) -> bool:
+    """Поднимает базу из закреплённого в личке бэкапа.
+
+    История чата боту недоступна, но закреплённое сообщение отдаётся в getChat —
+    на этом и держится восстановление после передеплоя.
+    """
+    if not owner_chat_id:
+        return False
+    try:
+        chat = await api.get_chat(owner_chat_id)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось открыть личку владельца: %r", e)
+        return False
+
+    document = (chat.get("pinned_message") or {}).get("document") or {}
+    name = document.get("file_name") or ""
+    if not name.endswith((".sqlite3", ".db")):
+        log.info("закреплённого бэкапа в личке нет")
+        return False
+
+    incoming = config.DB_PATH.with_suffix(".incoming")
+    try:
+        info = await api.get_file(document["file_id"])
+        config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        incoming.write_bytes(await api.download(info["file_path"]))
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось скачать закреплённый бэкап: %r", e)
+        incoming.unlink(missing_ok=True)
+        return False
+
+    if not await db.is_valid_database(incoming):
+        log.warning("закреплённый файл не похож на базу Guard")
+        incoming.unlink(missing_ok=True)
+        return False
+
+    incoming.replace(config.DB_PATH)
+    log.info("база восстановлена из закреплённого бэкапа")
+    return True
 
 
 async def _prune() -> None:

@@ -16,6 +16,9 @@ class FakeBotAPI:
         self.downloads: dict[str, bytes] = {}
         self.uploads: list[bytes] = []
         self.connection = None            # что вернёт getBusinessConnection
+        self.chat: dict | None = {}       # что вернёт getChat
+        self.pinned: list[int] = []
+        self.unpinned: list[int] = []
         self.connection_lookups = 0
         self.captions: list[str | None] = []
         self._ids = itertools.count(1000)
@@ -49,6 +52,19 @@ class FakeBotAPI:
 
     async def set_my_commands(self, commands):
         self.commands = commands
+        return True
+
+    async def get_chat(self, chat_id):
+        if self.chat is None:
+            raise RuntimeError("Bad Request: chat not found")
+        return self.chat
+
+    async def pin_message(self, chat_id, message_id):
+        self.pinned.append(message_id)
+        return True
+
+    async def unpin_message(self, chat_id, message_id):
+        self.unpinned.append(message_id)
         return True
 
     async def get_business_connection(self, business_connection_id):
