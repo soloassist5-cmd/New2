@@ -515,6 +515,53 @@ async def clear_intercepted(owner_id: int, *, chat_id: int | None = None,
     return cur.rowcount or 0
 
 
+async def dossier(owner_id: int, user_id: int, chat_id: int | None = None) -> dict:
+    """Всё, что бот успел записать про человека. Только своя база, без разведки."""
+    msgs = await fetchone(
+        "SELECT COUNT(*) AS total, MIN(date) AS first, MAX(date) AS last, "
+        "SUM(media_type IS NOT NULL) AS media FROM messages "
+        "WHERE owner_id=? AND user_id=?", (owner_id, user_id))
+    dels = await fetchone(
+        "SELECT COUNT(*) AS total, MAX(deleted_at) AS last FROM deleted "
+        "WHERE owner_id=? AND user_id=?", (owner_id, user_id))
+    edits_row = await fetchone(
+        "SELECT COUNT(*) AS total, MAX(edited_at) AS last FROM edits "
+        "WHERE owner_id=? AND user_id=?", (owner_id, user_id))
+    calls = await fetchone(
+        "SELECT COUNT(*) AS total, MAX(at) AS last FROM urgent_calls "
+        "WHERE owner_id=? AND user_id=?", (owner_id, user_id))
+    kept = await fetchall(
+        "SELECT reason, COUNT(*) AS total FROM intercepted "
+        "WHERE owner_id=? AND user_id=? GROUP BY reason", (owner_id, user_id))
+
+    def counted(row, extra=()):
+        out = {"total": (row["total"] if row else 0) or 0,
+               "last": row["last"] if row else None}
+        for key in extra:
+            out[key] = (row[key] if row else 0) or 0
+        return out
+
+    return {
+        "user_id": user_id,
+        "name": await name_of(owner_id, user_id),
+        "messages": counted(msgs, ("media",)) | {"first": msgs["first"] if msgs
+                                                 else None},
+        "deleted": counted(dels),
+        "edits": counted(edits_row),
+        "urgent": counted(calls),
+        "intercepted": {row["reason"]: row["total"] for row in kept},
+        "allowed": await fetchone(
+            "SELECT * FROM allowlist WHERE owner_id=? AND user_id=?",
+            (owner_id, user_id)) is not None,
+        "mutes": await fetchall(
+            "SELECT * FROM mutes WHERE owner_id=? AND user_id=?",
+            (owner_id, user_id)),
+        "chat": await fetchone(
+            "SELECT * FROM settings WHERE owner_id=? AND chat_id=?",
+            (owner_id, chat_id)) if chat_id is not None else None,
+    }
+
+
 async def intercepted_summary(owner_id: int) -> dict:
     """Итог по журналу: сколько, из скольких чатов и с какого времени."""
     row = await fetchone(

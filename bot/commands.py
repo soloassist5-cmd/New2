@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, clearlog, digest, dotcmd, parse, transcript, urgent
+from bot import access, clearlog, digest, dossier, dotcmd, parse, transcript, urgent
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -76,6 +76,7 @@ HELP = (
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
     "/clearlog — почистить журнал перехваченного\n"
     "/deleted [N] — последние удалённые\n"
+    "/dox <id> — досье: всё, что я записал про человека\n"
     "/chats — чаты, где вы меняли настройки\n"
     "/urgent — срочные вызовы от собеседников\n"
     "/find <текст> — поиск по всему сохранённому\n"
@@ -88,7 +89,7 @@ HELP = (
 IN_CHAT_HINT = (
     "\n\n**В самих переписках** (пишете вы, от своего имени):\n"
     "`{p}mute` · `{p}unmute` · `{p}gmute` · `{p}del` · `{p}purge` · `{p}deleted` · "
-    "`{p}id` · `{p}help`"
+    "`{p}id` · `{p}dox` · `{p}help`"
 )
 
 ADMIN_HELP = (
@@ -104,6 +105,7 @@ MENU = (
     ("intercepted", "что перехвачено"),
     ("clearlog", "почистить журнал перехваченного"),
     ("deleted", "последние удалённые сообщения"),
+    ("dox", "досье на человека: /dox <id>"),
     ("chats", "чаты с изменёнными настройками"),
     ("urgent", "срочные вызовы от собеседников"),
     ("find", "поиск по сохранённому: /find текст"),
@@ -364,6 +366,19 @@ async def cmd_clearlog(api, message: dict, args: str) -> None:
     await api.send_message(chat_id, text, reply_markup=keyboard)
 
 
+async def cmd_dox(api, message: dict, args: str) -> None:
+    """Досье по id: в переписке удобнее `.dox` реплаем, здесь — по номеру."""
+    chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
+    raw = args.strip()
+    if not re.fullmatch(r"-?\d+", raw):
+        await api.send_message(chat_id, "Использование: `/dox <id>`\n\n"
+                               "_id можно взять из `.id` в переписке или из "
+                               "`/intercepted`._")
+        return
+    await api.send_message(chat_id, await dossier.card(api, owner_id, int(raw)))
+
+
 async def cmd_find(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
     owner_id = (message.get("from") or {}).get("id")
@@ -480,6 +495,8 @@ HANDLERS = {
     "intercepted": cmd_intercepted,
     "muted": cmd_intercepted,
     "clearlog": cmd_clearlog,
+    "dox": cmd_dox,
+    "whois": cmd_dox,
     "deleted": cmd_deleted,
     "find": cmd_find,
     "export": cmd_export,

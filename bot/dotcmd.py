@@ -481,6 +481,19 @@ async def cmd_id(ctx: BizCtx) -> None:
     await ctx.private("\n".join(lines))
 
 
+@bizcmd("dox", args="[reply|id]", cat="Инфо", aliases=["whois", "досье"],
+        desc="досье: всё, что я записал про человека")
+async def cmd_dox(ctx: BizCtx) -> None:
+    from bot import dossier
+
+    user_id, _, _ = await ctx.target()
+    if user_id is None:
+        await ctx.fail("На кого? Ответьте на сообщение или `.dox <id>`.")
+        return
+    await ctx.private(await dossier.card(ctx.api, ctx.owner_id, user_id,
+                                         chat_id=ctx.chat_id))
+
+
 @bizcmd("ping", desc="проверить, что бот жив", cat="Инфо")
 async def cmd_ping(ctx: BizCtx) -> None:
     started = time.perf_counter()
