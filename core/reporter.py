@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import logging
 
+from bot import markup
 from core import mediastore, state
 
 log = logging.getLogger("reporter")
@@ -70,8 +71,11 @@ async def send_report(owner_id: int, text: str, *, file_id: str | None = None,
 
     if not _userbot_owner(owner_id):
         return False
-    # Запасной путь: копия медиа уже лежит в LOG_CHAT, отчёт цепляем к ней ответом.
-    return await mediastore.send_log(text, media_ref=media_ref) is not None
+    # Запасной путь: копия медиа уже лежит в LOG_CHAT, отчёт цепляем к ней
+    # ответом. Telethon собирает разметку сам, поэтому служебные метки дословных
+    # кусков надо снять — иначе они уедут в сообщение как есть.
+    return await mediastore.send_log(markup.strip_raw(text),
+                                     media_ref=media_ref) is not None
 
 
 async def send_document(owner_id: int, payload: bytes, filename: str,
@@ -93,7 +97,8 @@ async def send_document(owner_id: int, payload: bytes, filename: str,
     try:
         buf = io.BytesIO(payload)
         buf.name = filename
-        return await mediastore.send_log(caption, file=buf) is not None
+        return await mediastore.send_log(markup.strip_raw(caption),
+                                         file=buf) is not None
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось отправить файл в лог-чат: %r", e)
         return False

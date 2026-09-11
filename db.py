@@ -422,6 +422,13 @@ async def drop_message(owner_id: int, chat_id: int, msg_id: int) -> None:
                   (owner_id, chat_id, msg_id))
 
 
+async def count_edits(owner_id: int, chat_id: int, msg_id: int) -> int:
+    """Который раз правят это самое сообщение."""
+    return await scalar(
+        "SELECT COUNT(*) FROM edits WHERE owner_id=? AND chat_id=? AND msg_id=?",
+        (owner_id, chat_id, msg_id))
+
+
 async def set_text(owner_id: int, chat_id: int, msg_id: int, text: str) -> None:
     """Правит текст уже закэшированного сообщения, не трогая остальное."""
     await execute(

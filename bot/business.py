@@ -20,6 +20,7 @@ import db
 from bot import (
     access,
     dotcmd,
+    editlog,
     funcmd,  # noqa: F401 — импорт регистрирует команды
     outgoing,
     parse,
@@ -535,11 +536,8 @@ async def on_edited_business_message(api, message: dict) -> None:
         return
     if row["user_id"] == owner_id and not config.LOG_OWN:
         return
+    count = await db.count_edits(owner_id, chat_id, message_id)
     await reporter.send_report(
         owner_id,
-        "✏️ **Сообщение изменено**\n"
-        f"👤 {row['user_name'] or 'неизвестно'} (`{row['user_id']}`)\n"
-        f"💬 {parse.chat_title(chat)}\n\n"
-        f"**Было:**\n{fmt.truncate(old_text, 1200)}\n\n"
-        f"**Стало:**\n{fmt.truncate(new_text, 1200)}"
-    )
+        editlog.card(row, chat, old_text, new_text, now=db.now(), count=count,
+                     owner_id=owner_id))

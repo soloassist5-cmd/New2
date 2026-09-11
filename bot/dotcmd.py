@@ -406,6 +406,12 @@ async def cmd_antidelete(ctx: BizCtx) -> None:
     await _toggle(ctx, "antidelete", "Антиудаление")
 
 
+@bizcmd("logedits", args="[on|off]", cat="Чат", aliases=["edits"],
+        desc="сообщать о правках в этом чате")
+async def cmd_logedits(ctx: BizCtx) -> None:
+    await _toggle(ctx, "log_edits", "Уведомления о правках")
+
+
 @bizcmd("ignore", args="[on|off]", cat="Чат", desc="полностью игнорировать этот чат")
 async def cmd_ignore(ctx: BizCtx) -> None:
     await _toggle(ctx, "ignored", "Игнорирование чата")

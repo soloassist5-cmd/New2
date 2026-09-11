@@ -22,6 +22,24 @@ _STRIKE = re.compile(r"~~([^~]+)~~")
 _SLOT = "\x00{}\x00"
 _SLOT_RE = re.compile(r"\x00(\d+)\x00")
 
+# Чужой текст, внутри которого разметку искать не нужно: `**` и `_` в чьём-то
+# сообщении — это просто символы, а не приказ сделать жирным.
+_RAW_OPEN, _RAW_CLOSE = "\x02", "\x03"
+_RAW = re.compile(f"{_RAW_OPEN}([\\s\\S]*?){_RAW_CLOSE}")
+
+
+def raw(text: str) -> str:
+    """Помечает фрагмент как дословный. Разметка вокруг него работает как обычно."""
+    if not text:
+        return ""
+    clean = text.replace(_RAW_OPEN, "").replace(_RAW_CLOSE, "")
+    return f"{_RAW_OPEN}{clean}{_RAW_CLOSE}"
+
+
+def strip_raw(text: str) -> str:
+    """Убирает служебные метки — для путей, где HTML не собирается (Telethon)."""
+    return (text or "").replace(_RAW_OPEN, "").replace(_RAW_CLOSE, "")
+
 
 def to_html(text: str) -> str:
     """Готовый HTML для parse_mode=HTML."""
@@ -42,6 +60,7 @@ def to_html(text: str) -> str:
         return park(f"<blockquote>{to_html(inner)}</blockquote>") + tail
 
     text = _QUOTE.sub(quote, text)
+    text = _RAW.sub(lambda m: park(html.escape(m.group(1))), text)
 
     # Код и ссылки прячем до экранирования: внутри них разметку искать не нужно.
     text = _FENCED.sub(lambda m: park(f"<pre>{html.escape(m.group(1))}</pre>"), text)

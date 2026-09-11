@@ -234,13 +234,17 @@ def test_own_deletions_do_not_produce_reports():
 
 # ---------------------------------------------------------------- правки ----
 
-def test_edit_is_reported_with_both_versions():
+def test_edit_is_reported_with_the_change_highlighted():
+    from bot import markup
+
     api = connect()
     incoming(text="было", message_id=70)
     edited = business_message(text="стало", message_id=70)
     asyncio.run(business.on_edited_business_message(state.api, edited))
-    report = api.texts[-1]
-    assert "Было:" in report and "было" in report and "стало" in report
+    report = markup.to_html(api.texts[-1])
+    assert "Правка" in report
+    assert "<s>бы</s>" in report and "<b>ста</b>" in report, "видно, что изменилось"
+    assert "ло" in report, "общая часть остаётся как есть"
     assert asyncio.run(db.get_message(OWNER, PEER, 70))["text"] == "стало"
 
 
