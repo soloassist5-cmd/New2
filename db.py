@@ -507,32 +507,84 @@ async def count_intercepted(owner_id: int, *, since: int = 0) -> int:
         (owner_id, since))
 
 
-def _intercepted_scope(owner_id: int, chat_id: int | None,
-                       before: int | None) -> tuple[str, list]:
+# Всё, что копится само и что имеет смысл чистить руками:
+# ключ -> (таблица, колонка со временем, есть ли chat_id).
+# Имена таблиц и колонок берутся только отсюда — в SQL ниже они подставляются
+# строкой, и пускать туда что-то извне нельзя.
+PURGEABLE = {
+    "intercepted": ("intercepted", "at", True),
+    "deleted": ("deleted", "deleted_at", True),
+    "edits": ("edits", "edited_at", True),
+    "urgent": ("urgent_calls", "at", True),
+    "names": ("aliases", "first_seen", False),
+    "cache": ("messages", "date", True),
+}
+
+
+def _purge_scope(kind: str, owner_id: int, chat_id: int | None,
+                 before: int | None) -> tuple[str, str, list]:
+    table, stamp, has_chat = PURGEABLE[kind]
     where, params = ["owner_id = ?"], [owner_id]
-    if chat_id is not None:
+    if chat_id is not None and has_chat:
         where.append("chat_id = ?")
         params.append(chat_id)
     if before is not None:
-        where.append("at < ?")
+        where.append(f"{stamp} < ?")
         params.append(before)
-    return " AND ".join(where), params
+    return table, " AND ".join(where), params
+
+
+def purgeable(kind: str, chat_id: int | None = None) -> bool:
+    """Есть ли что чистить в этой области — у истории имён чата нет."""
+    if kind not in PURGEABLE:
+        return False
+    return chat_id is None or PURGEABLE[kind][2]
+
+
+async def count_kind(kind: str, owner_id: int, *, chat_id: int | None = None,
+                     before: int | None = None) -> int:
+    """Сколько попадёт под чистку — показываем до того, как удалять."""
+    if not purgeable(kind, chat_id):
+        return 0
+    table, where, params = _purge_scope(kind, owner_id, chat_id, before)
+    return await scalar(f"SELECT COUNT(*) FROM {table} WHERE {where}", params)
+
+
+async def clear_kind(kind: str, owner_id: int, *, chat_id: int | None = None,
+                     before: int | None = None) -> int:
+    """Чистит одну область. Возвращает, сколько удалено."""
+    if not purgeable(kind, chat_id):
+        return 0
+    table, where, params = _purge_scope(kind, owner_id, chat_id, before)
+    cur = await conn().execute(f"DELETE FROM {table} WHERE {where}", params)
+    await conn().commit()
+    if kind == "names":
+        forget_aliases()          # кэш имён пережил бы собственную историю
+    return cur.rowcount or 0
+
+
+async def counts_by_kind(owner_id: int, *, chat_id: int | None = None,
+                         before: int | None = None) -> dict[str, int]:
+    return {kind: await count_kind(kind, owner_id, chat_id=chat_id, before=before)
+            for kind in PURGEABLE if purgeable(kind, chat_id)}
+
+
+async def oldest_of(kind: str, owner_id: int) -> int | None:
+    if kind not in PURGEABLE:
+        return None
+    table, stamp, _ = PURGEABLE[kind]
+    return await scalar(f"SELECT MIN({stamp}) FROM {table} WHERE owner_id=?",
+                        (owner_id,), None)
 
 
 async def intercepted_in_scope(owner_id: int, *, chat_id: int | None = None,
                                before: int | None = None) -> int:
-    """Сколько попадёт под чистку — показываем до того, как удалять."""
-    where, params = _intercepted_scope(owner_id, chat_id, before)
-    return await scalar(f"SELECT COUNT(*) FROM intercepted WHERE {where}", params)
+    return await count_kind("intercepted", owner_id, chat_id=chat_id, before=before)
 
 
 async def clear_intercepted(owner_id: int, *, chat_id: int | None = None,
                             before: int | None = None) -> int:
-    """Чистит журнал перехваченного. Возвращает, сколько удалено."""
-    where, params = _intercepted_scope(owner_id, chat_id, before)
-    cur = await conn().execute(f"DELETE FROM intercepted WHERE {where}", params)
-    await conn().commit()
-    return cur.rowcount or 0
+    return await clear_kind("intercepted", owner_id, chat_id=chat_id, before=before)
 
 
 # Как звали человека в прошлый раз — чтобы не ходить в базу на каждое сообщение.

@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, clearlog, digest, dossier, dotcmd, parse, transcript, urgent
+from bot import access, cleanup, digest, dossier, dotcmd, parse, transcript, urgent
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -74,7 +74,9 @@ HELP = (
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
-    "/clearlog — почистить журнал перехваченного\n"
+    "/clear — что накопилось и что из этого почистить\n"
+    "  _по областям:_ /clearurgent, /clearlog, /cleardeleted, /clearedits, "
+    "/clearnames, /clearcache\n"
     "/deleted [N] — последние удалённые\n"
     "/dox <id> — досье: всё, что я записал про человека\n"
     "/chats — чаты, где вы меняли настройки\n"
@@ -103,7 +105,7 @@ MENU = (
     ("gmute", "не беспокоить: удалять сообщения всех"),
     ("ungmute", "выключить «не беспокоить»"),
     ("intercepted", "что перехвачено"),
-    ("clearlog", "почистить журнал перехваченного"),
+    ("clear", "что накопилось и что почистить"),
     ("deleted", "последние удалённые сообщения"),
     ("dox", "досье на человека: /dox <id>"),
     ("chats", "чаты с изменёнными настройками"),
@@ -348,22 +350,24 @@ async def cmd_intercepted(api, message: dict, args: str) -> None:
                          empty="🔇 Пока ничего не перехвачено.")
 
 
-async def cmd_clearlog(api, message: dict, args: str) -> None:
-    """Ручная чистка журнала перехваченного — всегда через подтверждение."""
-    chat_id = message["chat"]["id"]
+async def cmd_clear(api, message: dict, args: str) -> None:
+    """Обзор накопленного с кнопкой на каждую область."""
     owner_id = (message.get("from") or {}).get("id")
-    parsed = clearlog.parse_args(args)
+    text, keyboard = await cleanup.overview(owner_id)
+    await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
 
-    if parsed is None:
-        text, keyboard = await clearlog.offer(owner_id)
-    elif parsed[0] == "chat":
-        target = parsed[1]
-        text, keyboard = await clearlog.offer_chat(
-            owner_id, target, await db.chat_title(owner_id, target) or "")
-    else:
-        text, keyboard = await clearlog.offer_days(owner_id, parsed[1])
 
-    await api.send_message(chat_id, text, reply_markup=keyboard)
+def _cleaner(kind: str):
+    """Команда на одну область: `/clearurgent`, `/clearlog` и остальные."""
+
+    async def handler(api, message: dict, args: str) -> None:
+        owner_id = (message.get("from") or {}).get("id")
+        scope, value = cleanup.parse_args(args)
+        text, keyboard = await cleanup.offer(owner_id, cleanup.CODES[kind],
+                                             scope, value)
+        await api.send_message(message["chat"]["id"], text, reply_markup=keyboard)
+
+    return handler
 
 
 async def cmd_dox(api, message: dict, args: str) -> None:
@@ -494,7 +498,14 @@ HANDLERS = {
     "allowed": cmd_allowed,
     "intercepted": cmd_intercepted,
     "muted": cmd_intercepted,
-    "clearlog": cmd_clearlog,
+    "clear": cmd_clear,
+    "cleanup": cmd_clear,
+    "clearlog": _cleaner("intercepted"),
+    "clearurgent": _cleaner("urgent"),
+    "cleardeleted": _cleaner("deleted"),
+    "clearedits": _cleaner("edits"),
+    "clearnames": _cleaner("names"),
+    "clearcache": _cleaner("cache"),
     "dox": cmd_dox,
     "whois": cmd_dox,
     "deleted": cmd_deleted,
@@ -640,7 +651,7 @@ async def _access_callback(api, query: dict, match: re.Match) -> None:
 
 async def handle_callback(api, query: dict) -> None:
     """Кнопки — только у заявок на доступ и у подтверждения чистки."""
-    if await clearlog.handle_callback(api, query):
+    if await cleanup.handle_callback(api, query):
         return
     match = ACCESS_RE.match(query.get("data") or "")
     if match is None:
