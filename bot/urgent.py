@@ -60,9 +60,12 @@ def hint() -> str:
             f"Так можно раз в сутки.")
 
 
-async def _tell_sender(api, chat_id: int, connection_id: str, text: str) -> None:
+async def _tell_sender(api, owner_id: int, chat_id: int, connection_id: str,
+                       text: str) -> None:
+    from bot import outgoing
+
     try:
-        await api.send_message(chat_id, text, business_connection_id=connection_id)
+        await outgoing.message(api, owner_id, chat_id, text, connection_id)
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось ответить на срочный вызов: %r", e)
 
@@ -82,13 +85,14 @@ async def handle(api, owner_id: int, message: dict, connection_id: str,
         key = (owner_id, user_id)
         if time.time() - _refused.get(key, 0) >= REFUSAL_COOLDOWN:
             _refused[key] = time.time()
-            await _tell_sender(api, chat_id, connection_id,
-                               ALREADY.format(left=fmt.human_delta(cooldown - passed)))
+            await _tell_sender(
+                api, owner_id, chat_id, connection_id,
+                ALREADY.format(left=fmt.human_delta(cooldown - passed)))
         return
 
     _refused.pop((owner_id, user_id), None)
     await db.add_urgent_call(owner_id, user_id, who, chat_id, reason)
-    await _tell_sender(api, chat_id, connection_id, ACCEPTED)
+    await _tell_sender(api, owner_id, chat_id, connection_id, ACCEPTED)
 
     card = [
         "🚨 **Срочный вызов**",

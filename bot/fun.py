@@ -14,6 +14,7 @@ import random
 import unicodedata
 
 import db
+from bot import outgoing
 
 log = logging.getLogger("fun")
 
@@ -95,7 +96,7 @@ def forget_drawn() -> None:
 
 async def send_sticker(api, chat_id: int, emoji: str,
                        connection_id: str | None = None, *,
-                       silent: bool = False) -> str | None:
+                       silent: bool = False, owner_id: int = 0) -> str | None:
     """Шлёт эмодзи стикером, переиспользуя уже загруженный файл.
 
     Возвращает file_id — по нему стикер уходит мгновенно, без рисования и
@@ -104,9 +105,8 @@ async def send_sticker(api, chat_id: int, emoji: str,
     cached = await db.kv_get(KV_PREFIX + emoji)
     if cached:
         try:
-            await api.send_sticker(chat_id, cached,
-                                   business_connection_id=connection_id,
-                                   disable_notification=silent)
+            await outgoing.sticker(api, owner_id, chat_id, cached, connection_id,
+                                 emoji=emoji, disable_notification=silent)
             return cached
         except Exception as e:                               # noqa: BLE001
             log.info("сохранённый стикер %r не подошёл (%r), рисую заново", emoji, e)
@@ -115,9 +115,9 @@ async def send_sticker(api, chat_id: int, emoji: str,
     if payload is None:
         return None
     try:
-        sent = await api.upload_sticker(chat_id, payload, "sticker.webp",
-                                        business_connection_id=connection_id,
-                                        disable_notification=silent)
+        sent = await outgoing.upload(api, owner_id, chat_id, payload, "sticker.webp",
+                                   connection_id, emoji=emoji,
+                                   disable_notification=silent)
     except Exception as e:                                   # noqa: BLE001
         log.warning("стикер не ушёл: %r", e)
         return None

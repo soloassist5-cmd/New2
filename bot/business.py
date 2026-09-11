@@ -21,6 +21,7 @@ from bot import (
     access,
     dotcmd,
     funcmd,  # noqa: F401 — импорт регистрирует команды
+    outgoing,
     parse,
     transcript,
     urgent,
@@ -273,8 +274,8 @@ async def _dnd_reply(api, owner_id: int, chat_id: int, user_id: int,
         return
     state.dnd_replied[key] = time.time()
     try:
-        await api.send_message(chat_id, config.DND_TEXT + urgent.hint(),
-                               business_connection_id=connection_id)
+        await outgoing.message(api, owner_id, chat_id,
+                             config.DND_TEXT + urgent.hint(), connection_id)
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось ответить в режиме «не беспокоить»: %r", e)
 
@@ -443,7 +444,7 @@ async def flush(key: tuple[int, int]) -> None:
             try:
                 await db.add_deleted(dict(row))
                 await reporter.send_report(
-                    owner_id, await _deleted_card(row, where),
+                    owner_id, await _deleted_card(row, where, owner_id),
                     file_id=row["file_id"], media_type=row["media_type"])
             except Exception:                                # noqa: BLE001
                 # Одна сорвавшаяся карточка не должна съесть остальные.
@@ -482,10 +483,14 @@ async def _report_purge(owner_id: int, chat_id: int, rows, ids: list[int],
             file_id=row["file_id"], media_type=row["media_type"])
 
 
-async def _deleted_card(row, where: str) -> str:
+async def _deleted_card(row, where: str, owner_id: int | None = None) -> str:
+    # Своё сообщение подписываем «Вы»: имени владельца в кэше нет, и «неизвестно»
+    # рядом с его же id выглядит поломкой.
+    who = ("Вы" if owner_id and row["user_id"] == owner_id
+           else row["user_name"] or "неизвестно")
     lines = [
         "🗑 **Удалённое сообщение**",
-        f"👤 {row['user_name'] or 'неизвестно'} (`{row['user_id']}`)",
+        f"👤 {who} (`{row['user_id']}`)",
         f"💬 {where}",
         f"🕒 отправлено {fmt.ts(row['date'])} · удалено {fmt.ts(db.now())}",
     ]

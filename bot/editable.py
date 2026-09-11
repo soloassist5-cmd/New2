@@ -26,16 +26,26 @@ class _Editable:
 
 
 class BizMessage(_Editable):
-    """Сообщение, отправленное ботом от имени владельца в его переписке."""
+    """Сообщение, отправленное ботом от имени владельца в его переписке.
 
-    def __init__(self, api, chat_id: int, message_id: int, connection_id: str):
+    owner_id нужен, чтобы правки доходили до кэша: анимация меняет текст
+    десяток раз, и в памяти должен остаться итог, а не первый кадр.
+    """
+
+    def __init__(self, api, chat_id: int, message_id: int, connection_id: str,
+                 owner_id: int | None = None):
         super().__init__(api, chat_id, message_id)
         self.connection_id = connection_id
+        self.owner_id = owner_id
 
     async def _apply(self, text: str) -> None:
+        from bot import outgoing
+
         await self.api.edit_message_text(
             self.chat_id, self.id, text,
             business_connection_id=self.connection_id)
+        if self.owner_id:
+            await outgoing.retext(self.owner_id, self.chat_id, self.id, text)
 
 
 class BotMessage(_Editable):
@@ -46,14 +56,19 @@ class BotMessage(_Editable):
 
 
 async def animated(api, chat_id: int, final: str, *, icon: str,
-                   connection_id: str | None = None, style: str | None = None):
+                   connection_id: str | None = None, style: str | None = None,
+                   owner_id: int | None = None):
     """Отправляет первый кадр и доигрывает анимацию до финального текста."""
+    from bot import outgoing
     from core import anim
 
     first = f"{icon} {anim.bar(0, 3, width=6)}"
-    sent = await api.send_message(chat_id, first,
-                                  business_connection_id=connection_id)
-    target = (BizMessage(api, chat_id, sent["message_id"], connection_id)
-              if connection_id else BotMessage(api, chat_id, sent["message_id"]))
+    if connection_id:
+        sent = await outgoing.message(api, owner_id, chat_id, first, connection_id)
+        target = BizMessage(api, chat_id, sent["message_id"], connection_id,
+                            owner_id)
+    else:
+        sent = await api.send_message(chat_id, first)
+        target = BotMessage(api, chat_id, sent["message_id"])
     await anim.play(target, final, icon=icon, style=style)
     return target

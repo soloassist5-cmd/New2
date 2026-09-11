@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from bot import fun
+from bot import fun, outgoing
 from bot.dotcmd import BizCtx, bizcmd
 from bot.editable import BizMessage
 from core import anim, fmt
@@ -51,12 +51,13 @@ async def _post(ctx: BizCtx, text: str) -> BizMessage | None:
     """Убирает команду и ставит на её место сообщение, которое можно править."""
     await ctx.drop_command()
     try:
-        sent = await ctx.api.send_message(ctx.chat_id, text,
-                                          business_connection_id=ctx.connection_id)
+        sent = await outgoing.message(ctx.api, ctx.owner_id, ctx.chat_id, text,
+                                    ctx.connection_id)
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось отправить: %r", e)
         return None
-    return BizMessage(ctx.api, ctx.chat_id, sent["message_id"], ctx.connection_id)
+    return BizMessage(ctx.api, ctx.chat_id, sent["message_id"], ctx.connection_id,
+                      ctx.owner_id)
 
 
 async def _animate(ctx: BizCtx, frames: list[str], *, delay: float = CAT_DELAY) -> None:
@@ -82,7 +83,8 @@ async def _sticker(ctx: BizCtx, emoji: str) -> None:
     # незачем, а собеседник иначе видит паузу между исчезновением и картинкой.
     dropped = asyncio.create_task(ctx.drop_command())
     try:
-        sent = await fun.send_sticker(ctx.api, ctx.chat_id, emoji, ctx.connection_id)
+        sent = await fun.send_sticker(ctx.api, ctx.chat_id, emoji, ctx.connection_id,
+                                  owner_id=ctx.owner_id)
     finally:
         await asyncio.gather(dropped, return_exceptions=True)
     if sent is None:
@@ -119,8 +121,8 @@ def _register_dice() -> None:
         async def handler(ctx: BizCtx, emoji: str = emoji) -> None:
             dropped = asyncio.create_task(ctx.drop_command())
             try:
-                await ctx.api.send_dice(ctx.chat_id, emoji,
-                                        business_connection_id=ctx.connection_id)
+                await outgoing.dice(ctx.api, ctx.owner_id, ctx.chat_id, emoji,
+                                  ctx.connection_id)
             except Exception as e:                           # noqa: BLE001
                 log.warning("кубик не бросился: %r", e)
             finally:

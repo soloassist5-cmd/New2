@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import digest, parse, transcript, urgent
+from bot import digest, outgoing, parse, transcript, urgent
 from bot.editable import BizMessage
 from core import anim, chatprefs, fmt, state
 
@@ -90,8 +90,8 @@ class BizCtx:
         removed = await self.drop_command()
         first = f"{icon} {anim.bar(0, 3, width=6)}"
         try:
-            sent = await self.api.send_message(
-                self.chat_id, first, business_connection_id=self.connection_id,
+            sent = await outgoing.message(
+                self.api, self.owner_id, self.chat_id, first, self.connection_id,
                 reply_to=None if removed else self.message_id)
         except Exception as e:                               # noqa: BLE001
             log.warning("не удалось отправить уведомление: %r", e)
@@ -99,7 +99,8 @@ class BizCtx:
             return
         style = "off" if {"q", "quiet"} & self.flags else None
         await anim.play(BizMessage(self.api, self.chat_id, sent["message_id"],
-                                   self.connection_id), final, icon=icon, style=style)
+                                   self.connection_id, self.owner_id),
+                        final, icon=icon, style=style)
 
     async def private(self, text: str) -> None:
         """Отвечает в личку с ботом — собеседник ничего не видит."""
