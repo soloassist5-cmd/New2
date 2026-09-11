@@ -69,6 +69,14 @@ async def safe_edit(msg, text: str, *, link_preview: bool = False):
         raise Aborted from e
 
 
+async def safe_edit_quiet(msg, text: str) -> None:
+    """Последняя попытка поставить текст: результат важнее спецэффекта."""
+    try:
+        await msg.edit(text, link_preview=False)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 def bar(step: int, steps: int, width: int = 8) -> str:
     filled = round(width * step / steps)
     return FILLED * filled + EMPTY * (width - filled)

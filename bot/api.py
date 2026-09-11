@@ -141,6 +141,22 @@ class BotAPI:
         return await self.call("editMessageReplyMarkup", chat_id=chat_id,
                                message_id=message_id, reply_markup=reply_markup)
 
+    async def send_sticker(self, chat_id: int, sticker: str, *,
+                           business_connection_id: str | None = None) -> dict:
+        return await self.call("sendSticker", chat_id=chat_id, sticker=sticker,
+                               business_connection_id=business_connection_id)
+
+    async def upload_sticker(self, chat_id: int, data: bytes, filename: str, *,
+                             business_connection_id: str | None = None) -> dict:
+        return await self.upload("sendSticker", "sticker", data, filename,
+                                 chat_id=chat_id,
+                                 business_connection_id=business_connection_id)
+
+    async def send_dice(self, chat_id: int, emoji: str, *,
+                        business_connection_id: str | None = None) -> dict:
+        return await self.call("sendDice", chat_id=chat_id, emoji=emoji,
+                               business_connection_id=business_connection_id)
+
     async def send_media(self, chat_id: int, file_id: str, media_type: str | None, *,
                          caption: str | None = None,
                          business_connection_id: str | None = None,

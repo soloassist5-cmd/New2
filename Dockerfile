@@ -10,6 +10,7 @@ WORKDIR /app
 # gcc нужен только на время сборки cryptg, git — для команды .update
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
+      fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

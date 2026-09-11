@@ -17,7 +17,14 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import access, dotcmd, parse, transcript, urgent
+from bot import (
+    access,
+    dotcmd,
+    funcmd,  # noqa: F401 — импорт регистрирует команды
+    parse,
+    transcript,
+    urgent,
+)
 from core import chatprefs, fmt, mediastore, reporter, state
 
 log = logging.getLogger("business")

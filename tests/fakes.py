@@ -25,6 +25,9 @@ class FakeBotAPI:
         self.callbacks: list[tuple[str, str]] = []
         self.markup_edits: list[tuple] = []
         self.edit_markups: list[dict] = []
+        self.stickers: list[tuple] = []
+        self.sticker_uploads: list[tuple] = []
+        self.dice: list[tuple] = []
         self._ids = itertools.count(1000)
 
     async def send_message(self, chat_id, text, *, business_connection_id=None,
@@ -65,6 +68,19 @@ class FakeBotAPI:
             raise RuntimeError("Bad Request: not enough rights")
         self.deleted.append((business_connection_id, list(message_ids)))
         return True
+
+    async def send_sticker(self, chat_id, sticker, *, business_connection_id=None):
+        self.stickers.append((chat_id, sticker, business_connection_id))
+        return {"message_id": next(self._ids), "sticker": {"file_id": "CACHED1"}}
+
+    async def upload_sticker(self, chat_id, data, filename, *,
+                             business_connection_id=None):
+        self.sticker_uploads.append((chat_id, data))
+        return {"message_id": next(self._ids), "sticker": {"file_id": "NEW1"}}
+
+    async def send_dice(self, chat_id, emoji, *, business_connection_id=None):
+        self.dice.append((chat_id, emoji, business_connection_id))
+        return {"message_id": next(self._ids)}
 
     async def set_my_commands(self, commands):
         self.commands = commands

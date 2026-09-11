@@ -29,16 +29,20 @@ class BizCommand:
     desc: str = ""
     visible: bool = False        # ответ виден собеседнику или уходит в личку с ботом
     aliases: tuple[str, ...] = ()
+    cat: str = "Прочее"
 
+
+# Порядок разделов в справке — фиксированный, а не как импортировались модули.
+CAT_ORDER = ("Мут", "Не беспокоить", "Чистка", "Чат", "Развлечения", "Инфо")
 
 REGISTRY: dict[str, BizCommand] = {}
 COMMANDS: list[BizCommand] = []
 
 
 def bizcmd(name: str, *, args: str = "", desc: str = "", visible: bool = False,
-           aliases: tuple[str, ...] | list[str] = ()):
+           aliases: tuple[str, ...] | list[str] = (), cat: str = "Прочее"):
     def wrapper(func: Callable) -> Callable:
-        cmd = BizCommand(name, func, args, desc, visible, tuple(aliases))
+        cmd = BizCommand(name, func, args, desc, visible, tuple(aliases), cat)
         COMMANDS.append(cmd)
         for key in (name, *cmd.aliases):
             REGISTRY[key] = cmd
@@ -133,7 +137,7 @@ MUTED_OTHER = "🔇 **{who} замучен(а) на {period}.**"
 MUTED_FOREVER_OTHER = "🔇 **{who} замучен(а) на неопределённый срок.**"
 
 
-@bizcmd("mute", args="[reply|id] [10m|2h|1d] [причина] [-all]", visible=True,
+@bizcmd("mute", args="[reply|id] [10m|2h|1d] [причина] [-all]", visible=True, cat="Мут",
         desc="замутить собеседника: его новые сообщения удаляются у всех")
 async def cmd_mute(ctx: BizCtx) -> None:
     user_id, who, rest = await ctx.target()
@@ -169,7 +173,7 @@ async def cmd_mute(ctx: BizCtx) -> None:
     await ctx.notice(text)
 
 
-@bizcmd("unmute", args="[reply|id]", visible=True, desc="снять мут в этом чате")
+@bizcmd("unmute", args="[reply|id]", visible=True, cat="Мут", desc="снять мут в этом чате")
 async def cmd_unmute(ctx: BizCtx) -> None:
     user_id, who, _ = await ctx.target()
     if user_id is None:
@@ -201,7 +205,7 @@ async def mute_digest(owner_id: int, user_id: int, who: str, since: int) -> None
                              chat_title=who)
 
 
-@bizcmd("mutelist", desc="список активных мутов", aliases=["mutes"])
+@bizcmd("mutelist", desc="список активных мутов", aliases=["mutes"], cat="Мут")
 async def cmd_mutelist(ctx: BizCtx) -> None:
     await ctx.private(await mute_list_text(ctx.owner_id))
 
@@ -223,7 +227,7 @@ async def mute_list_text(owner_id: int) -> str:
 
 # ------------------------------------------------------- не беспокоить -----
 
-@bizcmd("gmute", args="", aliases=["dnd"],
+@bizcmd("gmute", args="", aliases=["dnd"], cat="Не беспокоить",
         desc="режим «не беспокоить»: удалять сообщения всех подряд")
 async def cmd_gmute(ctx: BizCtx) -> None:
     if not ctx.can("can_delete_all_messages"):
@@ -234,7 +238,8 @@ async def cmd_gmute(ctx: BizCtx) -> None:
     await ctx.private(dnd_enabled_text())
 
 
-@bizcmd("ungmute", args="", aliases=["undnd"], desc="выключить «не беспокоить»")
+@bizcmd("ungmute", args="", aliases=["undnd"], cat="Не беспокоить",
+        desc="выключить «не беспокоить»")
 async def cmd_ungmute(ctx: BizCtx) -> None:
     if not state.dnd_active(ctx.owner_id):
         await ctx.fail("Режим «не беспокоить» и так выключен.")
@@ -271,14 +276,14 @@ async def dnd_digest(owner_id: int, since: int) -> None:
                          empty="🌙 За это время вам никто не писал.")
 
 
-@bizcmd("urgent", args="[N]", aliases=["calls"],
+@bizcmd("urgent", args="[N]", aliases=["calls"], cat="Не беспокоить",
         desc="срочные вызовы от собеседников")
 async def cmd_urgent(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 10
     await ctx.private(await urgent.recent_text(ctx.owner_id, max(1, min(limit, 50))))
 
 
-@bizcmd("allow", args="[reply|id]",
+@bizcmd("allow", args="[reply|id]", cat="Не беспокоить",
         desc="пропускать этого человека в «не беспокоить»")
 async def cmd_allow(ctx: BizCtx) -> None:
     user_id, who, _ = await ctx.target()
@@ -290,7 +295,7 @@ async def cmd_allow(ctx: BizCtx) -> None:
                       f"«не беспокоить».")
 
 
-@bizcmd("deny", args="[reply|id]", desc="убрать из белого списка")
+@bizcmd("deny", args="[reply|id]", cat="Не беспокоить", desc="убрать из белого списка")
 async def cmd_deny(ctx: BizCtx) -> None:
     user_id, who, _ = await ctx.target()
     if user_id is None:
@@ -301,7 +306,7 @@ async def cmd_deny(ctx: BizCtx) -> None:
                       else "Его и не было в белом списке.")
 
 
-@bizcmd("allowed", desc="белый список «не беспокоить»")
+@bizcmd("allowed", desc="белый список «не беспокоить»", cat="Не беспокоить")
 async def cmd_allowed(ctx: BizCtx) -> None:
     await ctx.private(await allowed_text(ctx.owner_id))
 
@@ -315,7 +320,7 @@ async def allowed_text(owner_id: int) -> str:
     return fmt.truncate("\n".join(lines), 3500)
 
 
-@bizcmd("muted", args="[N]", desc="что удалили мут и «не беспокоить»")
+@bizcmd("muted", args="[N]", cat="Не беспокоить", desc="что удалили мут и «не беспокоить»")
 async def cmd_muted(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 20
     rows = await db.intercepted(ctx.owner_id, limit=max(1, min(limit, 200)))
@@ -327,7 +332,7 @@ async def cmd_muted(ctx: BizCtx) -> None:
 
 # ---------------------------------------------------------------- чистка ----
 
-@bizcmd("del", args="(реплаем)", desc="удалить сообщение у всех", aliases=["d"])
+@bizcmd("del", args="(реплаем)", cat="Чистка", desc="удалить сообщение у всех", aliases=["d"])
 async def cmd_del(ctx: BizCtx) -> None:
     if not ctx.reply:
         await ctx.fail("Ответьте на сообщение, которое нужно удалить.")
@@ -340,7 +345,7 @@ async def cmd_del(ctx: BizCtx) -> None:
         await ctx.fail(f"Не удалось удалить: `{type(e).__name__}`")
 
 
-@bizcmd("purge", args="(реплаем)", desc="удалить всё от реплая до текущего сообщения")
+@bizcmd("purge", args="(реплаем)", cat="Чистка", desc="удалить всё от реплая до текущего сообщения")
 async def cmd_purge(ctx: BizCtx) -> None:
     if not ctx.reply:
         await ctx.fail("Ответьте на сообщение, с которого начинать чистку.")
@@ -379,19 +384,19 @@ async def _toggle(ctx: BizCtx, key: str, label: str) -> None:
     await ctx.private(text)
 
 
-@bizcmd("antidelete", args="[on|off]",
+@bizcmd("antidelete", args="[on|off]", cat="Чат",
         desc="сохранять удалённые сообщения этого чата",
         aliases=["ad"])
 async def cmd_antidelete(ctx: BizCtx) -> None:
     await _toggle(ctx, "antidelete", "Антиудаление")
 
 
-@bizcmd("ignore", args="[on|off]", desc="полностью игнорировать этот чат")
+@bizcmd("ignore", args="[on|off]", cat="Чат", desc="полностью игнорировать этот чат")
 async def cmd_ignore(ctx: BizCtx) -> None:
     await _toggle(ctx, "ignored", "Игнорирование чата")
 
 
-@bizcmd("chats", desc="чаты, где вы меняли настройки, и как вернуть как было")
+@bizcmd("chats", desc="чаты, где вы меняли настройки, и как вернуть как было", cat="Чат")
 async def cmd_chats(ctx: BizCtx) -> None:
     await ctx.private(await chats_text(ctx.owner_id))
 
@@ -415,7 +420,7 @@ async def chats_text(owner_id: int) -> str:
     return fmt.truncate("\n".join(lines), 3500)
 
 
-@bizcmd("deleted", args="[N]", desc="последние удалённые в этом чате", aliases=["dels"])
+@bizcmd("deleted", args="[N]", cat="Чат", desc="последние удалённые в этом чате", aliases=["dels"])
 async def cmd_deleted(ctx: BizCtx) -> None:
     limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 10
     rows = await db.last_deleted(ctx.owner_id, ctx.chat_id, max(1, min(limit, 30)))
@@ -431,7 +436,7 @@ async def cmd_deleted(ctx: BizCtx) -> None:
     await ctx.private(fmt.truncate("\n".join(out), 3500))
 
 
-@bizcmd("export", desc="выгрузить журнал удалённых этого чата файлом")
+@bizcmd("export", desc="выгрузить журнал удалённых этого чата файлом", cat="Чат")
 async def cmd_export(ctx: BizCtx) -> None:
     from core import reporter
 
@@ -454,7 +459,7 @@ async def cmd_export(ctx: BizCtx) -> None:
 
 # ------------------------------------------------------------------ инфо ----
 
-@bizcmd("id", desc="id чата и собеседника")
+@bizcmd("id", desc="id чата и собеседника", cat="Инфо")
 async def cmd_id(ctx: BizCtx) -> None:
     lines = [f"💬 Чат: `{ctx.chat_id}`"]
     if ctx.reply:
@@ -464,7 +469,7 @@ async def cmd_id(ctx: BizCtx) -> None:
     await ctx.private("\n".join(lines))
 
 
-@bizcmd("ping", desc="проверить, что бот жив")
+@bizcmd("ping", desc="проверить, что бот жив", cat="Инфо")
 async def cmd_ping(ctx: BizCtx) -> None:
     started = time.perf_counter()
     await ctx.drop_command()
@@ -476,7 +481,7 @@ async def cmd_ping(ctx: BizCtx) -> None:
                     f"работаю без перерыва {fmt.uptime(time.time() - state.start_time)}.")
 
 
-@bizcmd("stats", desc="сколько всего сохранено")
+@bizcmd("stats", desc="сколько всего сохранено", cat="Инфо")
 async def cmd_stats(ctx: BizCtx) -> None:
     s = await db.stats(ctx.owner_id)
     lines = ["📊 **Что у меня сохранено**", "",
@@ -490,7 +495,7 @@ async def cmd_stats(ctx: BizCtx) -> None:
     await ctx.private("\n".join(lines))
 
 
-@bizcmd("help", args="[команда]", desc="список команд")
+@bizcmd("help", args="[команда]", cat="Инфо", desc="список команд")
 async def cmd_help(ctx: BizCtx) -> None:
     await ctx.private(help_text(ctx.args[0] if ctx.args else None))
 
@@ -503,13 +508,21 @@ def help_text(name: str | None = None) -> str:
         where = "видна собеседнику" if cmd.visible else "ответ только вам"
         return (f"**{config.PREFIX}{cmd.name}**\n"
                 f"`{config.PREFIX}{cmd.name} {cmd.args}`\n\n{cmd.desc}\n_{where}_")
-    lines = [f"🛡 **Команды в личных чатах** (префикс `{config.PREFIX}`)", ""]
+    by_cat: dict[str, list[BizCommand]] = {}
     for cmd in COMMANDS:
-        mark = "💬" if cmd.visible else "🔒"
-        lines.append(f"{mark} `{config.PREFIX}{cmd.name}` — {cmd.desc}")
-    lines += ["", "💬 — уведомление появляется в переписке, 🔒 — ответ приходит "
-              "сюда, в личку с ботом."]
-    return "\n".join(lines)
+        by_cat.setdefault(cmd.cat, []).append(cmd)
+    order = sorted(by_cat, key=lambda c: (CAT_ORDER.index(c) if c in CAT_ORDER
+                                          else len(CAT_ORDER), c))
+
+    lines = [f"🛡 **Команды в личных чатах** (префикс `{config.PREFIX}`)"]
+    for cat in order:
+        lines.append(f"\n**{cat}**")
+        for cmd in by_cat[cat]:
+            mark = "💬" if cmd.visible else "🔒"
+            lines.append(f"{mark} `{config.PREFIX}{cmd.name}` — {cmd.desc}")
+    lines += ["", "💬 — результат виден собеседнику, 🔒 — ответ приходит сюда, "
+              "в личку с ботом."]
+    return fmt.truncate("\n".join(lines), 4000)
 
 
 # ------------------------------------------------------------- диспетчер ----
