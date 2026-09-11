@@ -570,11 +570,26 @@ async def aliases(owner_id: int, user_id: int, limit: int = 10):
 
 
 async def message_times(owner_id: int, user_id: int, limit: int = 5000):
-    """Когда человек писал — для портрета активности. Только даты, без текста."""
+    """Когда человек писал — для портрета активности. Только даты, без текста.
+
+    Собираем из трёх мест сразу. Кэш живой переписки редеет: то, что собеседник
+    удалил, переезжает в журнал удалённых, а то, что срезал мут или «не
+    беспокоить», — в перехваченное. По одному кэшу портрет замученного человека
+    вообще не построился бы, хотя писал он как раз больше всех.
+
+    Берём последние limit отметок, а не первые: привычка — это про «сейчас», и
+    у болтливого собеседника начало кэша описывает позапрошлый месяц.
+    """
     rows = await fetchall(
-        "SELECT date FROM messages WHERE owner_id=? AND user_id=? "
-        "ORDER BY date LIMIT ?", (owner_id, user_id, limit))
-    return [row["date"] for row in rows]
+        """SELECT date FROM (
+               SELECT date FROM messages     WHERE owner_id=? AND user_id=?
+               UNION ALL
+               SELECT date FROM deleted      WHERE owner_id=? AND user_id=?
+               UNION ALL
+               SELECT date FROM intercepted  WHERE owner_id=? AND user_id=?
+           ) WHERE date IS NOT NULL ORDER BY date DESC LIMIT ?""",
+        (owner_id, user_id) * 3 + (limit,))
+    return sorted(row["date"] for row in rows)
 
 
 async def dossier(owner_id: int, user_id: int, chat_id: int | None = None) -> dict:

@@ -321,3 +321,58 @@ def test_an_unknown_person_still_gets_the_account_age():
     text = card(350_000_000)
     assert "ничего нет" in text
     assert "Судя по номеру" in text and "2017" in text
+
+
+def intercept_at(stamps, reason="mute"):
+    for i, stamp in enumerate(stamps):
+        asyncio.run(db.add_intercepted(
+            {"owner_id": OWNER, "chat_id": VASYA, "msg_id": 900 + i,
+             "user_id": VASYA, "user_name": "Вася", "text": "y",
+             "date": stamp}, reason))
+
+
+def delete_at(stamps):
+    for i, stamp in enumerate(stamps):
+        asyncio.run(db.add_deleted(
+            {"owner_id": OWNER, "chat_id": VASYA, "msg_id": 800 + i,
+             "user_id": VASYA, "user_name": "Вася", "text": "x",
+             "date": stamp}))
+
+
+def test_a_muted_person_still_gets_a_portrait():
+    """Замученный пишет больше всех, а в кэш не попадает ничего — только журнал."""
+    intercept_at([at_hour(3, day=d, minute=m)
+                  for d in range(10) for m in (0, 20, 40)])
+    text = card()
+    assert "Как пишет" in text and "ночью" in text
+
+
+def test_deleted_messages_count_towards_the_portrait():
+    """Карточка ушла — строка из кэша убирается, но человек-то писал."""
+    delete_at([at_hour(23, day=d, minute=m)
+               for d in range(10) for m in (0, 20, 40)])
+    assert "Как пишет" in card()
+
+
+def test_the_three_sources_add_up():
+    wrote([at_hour(12, day=d) for d in range(6)])
+    delete_at([at_hour(12, day=d) for d in range(6, 12)])
+    intercept_at([at_hour(12, day=d) for d in range(12, 18)])
+    assert len(asyncio.run(db.message_times(OWNER, VASYA))) == 18
+    assert "Как пишет" in card()
+
+
+def test_the_portrait_describes_now_not_the_oldest_messages():
+    """Урезать надо старое: привычка — это про «сейчас»."""
+    wrote([at_hour(4, day=d) for d in range(20)]                   # давно, ночью
+          + [at_hour(15, day=d) for d in range(100, 120)])         # недавно, днём
+    recent = asyncio.run(db.message_times(OWNER, VASYA, limit=20))
+    assert len(recent) == 20
+    assert all(stamp >= at_hour(15, day=100) for stamp in recent)
+
+
+def test_times_come_back_oldest_first():
+    """Пауза между сообщениями считается вычитанием соседей — порядок важен."""
+    wrote([at_hour(12, day=d) for d in range(5)])
+    times = asyncio.run(db.message_times(OWNER, VASYA))
+    assert times == sorted(times)
