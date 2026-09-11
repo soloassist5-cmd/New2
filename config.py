@@ -83,6 +83,15 @@ DND_DEFAULT_TEXT = (
 )
 DND_TEXT: str = (os.getenv("DND_TEXT", "") or DND_DEFAULT_TEXT).strip()
 DND_REPLY_COOLDOWN: int = _int("DND_REPLY_COOLDOWN", 3600)
+
+# Срочный вызов: способ достучаться до владельца, пока включено «не беспокоить».
+URGENT_ENABLED: bool = _bool("URGENT_ENABLED", True)
+# Слова-триггеры; писать их нужно с «/» или «!» в начале сообщения.
+URGENT_WORDS: tuple[str, ...] = tuple(
+    word.strip().lower()
+    for word in (os.getenv("URGENT_WORDS") or "срочно,urgent,sos").split(",")
+    if word.strip())
+URGENT_COOLDOWN_HOURS: int = _int("URGENT_COOLDOWN_HOURS", 24)
 # Как часто напоминать владельцу, что режим всё ещё включён и что-то съедает.
 DND_NOTICE_EVERY: int = _int("DND_NOTICE_EVERY", 6 * 3600)
 

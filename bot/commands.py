@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, digest, dotcmd, parse, transcript
+from bot import access, digest, dotcmd, parse, transcript, urgent
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -76,6 +76,7 @@ HELP = (
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
     "/deleted [N] — последние удалённые\n"
     "/chats — чаты, где вы меняли настройки\n"
+    "/urgent — срочные вызовы от собеседников\n"
     "/find <текст> — поиск по всему сохранённому\n"
     "/mutes, /unmute <id> — муты\n"
     "/export — ваш журнал файлом\n"
@@ -102,6 +103,7 @@ MENU = (
     ("intercepted", "что перехвачено"),
     ("deleted", "последние удалённые сообщения"),
     ("chats", "чаты с изменёнными настройками"),
+    ("urgent", "срочные вызовы от собеседников"),
     ("find", "поиск по сохранённому: /find текст"),
     ("allowed", "белый список"),
     ("mutes", "активные муты"),
@@ -196,6 +198,11 @@ async def cmd_status(api, message: dict, _args: str) -> None:
         lines.append(f"🌙 Не беспокоить: **включён** (уже {spent}) — /ungmute")
         lines.append("_Пока включён, входящие удаляются сразу, поэтому отчётов "
                      "об удалении не будет._")
+        if config.URGENT_ENABLED and config.URGENT_WORDS:
+            calls = len(await db.urgent_calls(user_id, 50))
+            lines.append(f"🚨 Срочный вызов собеседникам доступен "
+                         f"(`/{config.URGENT_WORDS[0]}`, раз в сутки)"
+                         + (f" · вызовов: **{calls}** — /urgent" if calls else ""))
     else:
         lines.append("🌙 Не беспокоить: выключен")
 
@@ -220,6 +227,13 @@ async def cmd_status(api, message: dict, _args: str) -> None:
         if state.client is not None:
             lines.append("👤 юзербот-режим активен: работают и групповые чаты")
     await api.send_message(chat_id, "\n".join(lines))
+
+
+async def cmd_urgent(api, message: dict, args: str) -> None:
+    owner_id = (message.get("from") or {}).get("id")
+    limit = int(args) if args.strip().isdigit() else 10
+    await api.send_message(message["chat"]["id"],
+                           await urgent.recent_text(owner_id, max(1, min(limit, 50))))
 
 
 async def cmd_chats(api, message: dict, _args: str) -> None:
@@ -434,6 +448,8 @@ HANDLERS = {
     "status": cmd_status,
     "stats": cmd_status,
     "chats": cmd_chats,
+    "urgent": cmd_urgent,
+    "calls": cmd_urgent,
     "gmute": cmd_gmute,
     "dnd": cmd_gmute,
     "ungmute": cmd_ungmute,

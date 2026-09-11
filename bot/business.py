@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import access, dotcmd, parse, transcript
+from bot import access, dotcmd, parse, transcript, urgent
 from core import chatprefs, fmt, mediastore, reporter, state
 
 log = logging.getLogger("business")
@@ -261,7 +261,7 @@ async def _dnd_reply(api, owner_id: int, chat_id: int, user_id: int,
         return
     state.dnd_replied[key] = time.time()
     try:
-        await api.send_message(chat_id, config.DND_TEXT,
+        await api.send_message(chat_id, config.DND_TEXT + urgent.hint(),
                                business_connection_id=connection_id)
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось ответить в режиме «не беспокоить»: %r", e)
@@ -299,6 +299,12 @@ async def on_business_message(api, message: dict) -> None:
         return
 
     if state.dnd_active(owner_id) and not state.is_allowed(owner_id, sender.get("id")):
+        # Срочный вызов — единственный способ пробиться сквозь режим.
+        call = urgent.match(parse.text_of(message))
+        if call is not None:
+            await _intercept(api, owner_id, message, connection_id, reason="urgent")
+            await urgent.handle(api, owner_id, message, connection_id, call)
+            return
         if await _intercept(api, owner_id, message, connection_id, reason="dnd"):
             await _dnd_reply(api, owner_id, chat.get("id"), sender.get("id"),
                              connection_id)

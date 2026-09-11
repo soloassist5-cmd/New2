@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import config
 import db
-from bot import digest, parse, transcript
+from bot import digest, parse, transcript, urgent
 from bot.editable import BizMessage
 from core import anim, chatprefs, fmt, state
 
@@ -246,13 +246,18 @@ async def cmd_ungmute(ctx: BizCtx) -> None:
 
 
 def dnd_enabled_text() -> str:
-    quoted = "\n".join(f"> {line}" for line in config.DND_TEXT.splitlines())
-    return (f"🌙 **Режим «не беспокоить» включён.**\n\n"
+    answer = config.DND_TEXT + urgent.hint()
+    quoted = "\n".join(f"> {line}" for line in answer.splitlines())
+    text = (f"🌙 **Режим «не беспокоить» включён.**\n\n"
             f"Сообщения от всех будут удаляться сразу, а отправитель получит "
-            f"от вашего имени:\n\n{quoted}\n\n"
-            f"Исключения — белый список (`{config.PREFIX}allow` реплаем или "
-            f"/allow <id>).\n"
-            f"Выключить: `{config.PREFIX}ungmute` или /ungmute.")
+            f"от вашего имени:\n\n{quoted}\n\n")
+    if config.URGENT_ENABLED and config.URGENT_WORDS:
+        text += ("Срочный вызов приходит вам отдельным уведомлением, "
+                 "по одному в сутки от человека — /urgent.\n")
+    text += (f"Исключения — белый список (`{config.PREFIX}allow` реплаем или "
+             f"/allow <id>).\n"
+             f"Выключить: `{config.PREFIX}ungmute` или /ungmute.")
+    return text
 
 
 def dnd_disabled_text(since: int) -> str:
@@ -264,6 +269,13 @@ async def dnd_digest(owner_id: int, since: int) -> None:
     rows = await db.intercepted(owner_id, since=since, reason="dnd", limit=500)
     await digest.deliver(owner_id, rows, title="🌙 **Пока вас не беспокоили**",
                          empty="🌙 За это время вам никто не писал.")
+
+
+@bizcmd("urgent", args="[N]", aliases=["calls"],
+        desc="срочные вызовы от собеседников")
+async def cmd_urgent(ctx: BizCtx) -> None:
+    limit = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 10
+    await ctx.private(await urgent.recent_text(ctx.owner_id, max(1, min(limit, 50))))
 
 
 @bizcmd("allow", args="[reply|id]",

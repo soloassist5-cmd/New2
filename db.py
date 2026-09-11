@@ -107,6 +107,18 @@ CREATE TABLE IF NOT EXISTS mutes (
     PRIMARY KEY (owner_id, chat_id, user_id)
 );
 
+-- Срочные вызовы: кто и когда дёргал владельца сквозь «не беспокоить».
+CREATE TABLE IF NOT EXISTS urgent_calls (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id  INTEGER NOT NULL,
+    user_id   INTEGER NOT NULL,
+    user_name TEXT,
+    chat_id   INTEGER,
+    reason    TEXT,
+    at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_urgent ON urgent_calls(owner_id, user_id, at);
+
 -- Кого «не беспокоить» пропускает.
 CREATE TABLE IF NOT EXISTS allowlist (
     owner_id INTEGER NOT NULL,
@@ -503,6 +515,29 @@ async def all_mutes(owner_id: int | None = None):
     return await fetchall("SELECT * FROM mutes WHERE owner_id=?", (owner_id,))
 
 
+# ---------------------------------------------------------- срочные вызовы --
+
+async def last_urgent_call(owner_id: int, user_id: int) -> int:
+    """Когда этот человек дёргал владельца в прошлый раз. 0 — никогда."""
+    return await scalar(
+        "SELECT MAX(at) FROM urgent_calls WHERE owner_id=? AND user_id=?",
+        (owner_id, user_id))
+
+
+async def add_urgent_call(owner_id: int, user_id: int, user_name: str | None,
+                          chat_id: int | None, reason: str) -> None:
+    await execute(
+        "INSERT INTO urgent_calls(owner_id,user_id,user_name,chat_id,reason,at) "
+        "VALUES (?,?,?,?,?,?)",
+        (owner_id, user_id, user_name, chat_id, reason, now()))
+
+
+async def urgent_calls(owner_id: int, limit: int = 20):
+    return await fetchall(
+        "SELECT * FROM urgent_calls WHERE owner_id=? ORDER BY at DESC LIMIT ?",
+        (owner_id, limit))
+
+
 # ------------------------------------------------------------ белый список --
 
 async def allow(owner_id: int, user_id: int, name: str) -> None:
@@ -708,6 +743,7 @@ async def cleanup() -> tuple[int, int]:
     b = cur.rowcount or 0
     await conn().execute("DELETE FROM edits WHERE edited_at < ?", (cutoff2,))
     await conn().execute("DELETE FROM intercepted WHERE at < ?", (cutoff2,))
+    await conn().execute("DELETE FROM urgent_calls WHERE at < ?", (cutoff2,))
     await conn().commit()
     return a, b
 
