@@ -1,18 +1,26 @@
-"""Сводка о перехваченном: списком, если мало, файлом — если много.
+"""Сводка о перехваченном — всегда txt-файлом.
 
-Перехваченное копится из всех чатов сразу, поэтому и список, и файл разложены
-по чатам. Вперемешку это нечитаемо уже на втором собеседнике: строки идут по
-времени, а глазами нужен ответ на вопрос «что мне писал вот этот».
+Файл, а не лента в переписке с ботом: журнал хочется хранить и искать по нему,
+а лента тонет среди отчётов об удалениях. Короткая сводка при этом дублируется
+в подписи к файлу, чтобы не открывать его ради двух строк.
+
+Внутри всё разложено по чатам. Вперемешку это нечитаемо уже на втором
+собеседнике: строки идут по времени, а глазами нужен ответ на вопрос «что мне
+писал вот этот».
 """
 from __future__ import annotations
+
+import datetime as _dt
 
 import config
 import db
 from bot import transcript
 from core import fmt, mediastore, reporter
 
-# Больше — уже нечитаемо, отправляем файлом. 0 — файлом всегда.
+# Сколько сообщений ещё показать прямо в подписи к файлу. 0 — только файл.
 LIST_LIMIT = config.DIGEST_LIST_LIMIT
+CAPTION_ROOM = 900       # у подписи Telegram предел 1024, остальное — на разметку
+DEFAULT_TITLE = "перехваченное"
 REASON_ICON = {"mute": "🔇", "dnd": "🌙"}
 
 
@@ -68,9 +76,40 @@ def _chat_block(chat_id, rows, title: str) -> str:
                                for row in rows])
 
 
+def _caption(title: str, stats: dict, groups, names: dict) -> str:
+    """Подпись к файлу: короткую сводку показываем прямо в ней."""
+    if 0 < stats["total"] <= LIST_LIMIT:
+        preview = "\n\n".join(_chat_block(chat_id, messages, names.get(chat_id, ""))
+                              for chat_id, messages in groups)
+        tail = (f"\n\n📎 вложений: **{stats['media']}**" if stats["media"] else "")
+        caption = f"{title}\n\n{preview}{tail}"
+        # Подпись Telegram обрежет по 1024 символа, а обрезанная сводка хуже,
+        # чем её отсутствие: файл-то с полным текстом всё равно приложен.
+        if len(caption) <= CAPTION_ROOM:
+            return caption
+
+    lines = [title, "", f"сообщений: **{stats['total']}**"]
+    if stats["chats"] > 1:
+        lines.append(f"чатов: **{stats['chats']}**")
+    if stats["media"]:
+        lines.append(f"вложений: **{stats['media']}**")
+    return "\n".join(lines)
+
+
+def filename(when: int) -> str:
+    """Дата в имени: журнал копится, и потом его надо как-то находить."""
+    return f"intercepted_{_dt.datetime.fromtimestamp(when):%Y-%m-%d_%H%M}.txt"
+
+
 async def deliver(owner_id: int, rows, *, title: str, empty: str,
-                  chat_title: str = "перехваченное") -> bool:
-    """Отдаёт владельцу список или файл. False — отдавать было нечего."""
+                  chat_title: str = DEFAULT_TITLE) -> bool:
+    """Отдаёт владельцу журнал файлом. False — отдавать было нечего.
+
+    Файл приходит всегда, даже на одно сообщение: его удобно хранить и искать
+    по нему, а лента в переписке с ботом теряется среди отчётов. Короткая
+    сводка при этом дублируется в подписи — открывать файл ради двух строк
+    незачем.
+    """
     if not rows:
         if empty:
             await reporter.send_report(owner_id, empty)
@@ -78,22 +117,14 @@ async def deliver(owner_id: int, rows, *, title: str, empty: str,
 
     groups = group(rows)
     names = await titles(owner_id, groups)
-
-    if len(rows) <= LIST_LIMIT:
-        blocks = [_chat_block(chat_id, messages, names.get(chat_id, ""))
-                  for chat_id, messages in groups]
-        body = fmt.truncate("\n\n".join(blocks), 3500)
-        await reporter.send_report(owner_id, f"{title}\n\n{body}")
-        return True
-
     when = db.now()
+    # «Перехваченные сообщения — перехваченное» в шапке файла выглядит глупо:
+    # уточнение дописываем, только когда оно и правда что-то уточняет.
+    heading = "Перехваченные сообщения"
+    if chat_title and chat_title != DEFAULT_TITLE:
+        heading += f" — {chat_title}"
     payload, stats = transcript.build_grouped(
-        groups, owner_id=owner_id, when=when, titles=names,
-        reason=f"Перехваченные сообщения — {chat_title}")
-    caption = [title, "", f"сообщений: **{stats['total']}**",
-               f"чатов: **{stats['chats']}**"]
-    if stats["media"]:
-        caption.append(f"вложений: **{stats['media']}**")
-    await reporter.send_document(owner_id, payload, f"intercepted_{when}.txt",
-                                 "\n".join(caption))
+        groups, owner_id=owner_id, when=when, titles=names, reason=heading)
+    await reporter.send_document(owner_id, payload, filename(when),
+                                 _caption(title, stats, groups, names))
     return True

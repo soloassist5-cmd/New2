@@ -1,7 +1,8 @@
-"""Сводка перехваченного: разбивка по чатам, списком и файлом.
+"""Сводка перехваченного: всегда файлом, внутри — разбивка по чатам.
 
 Раньше строки шли сплошным потоком по времени — на двух собеседниках это уже
-каша, а глазами нужен ответ на вопрос «что мне писал вот этот».
+каша, а глазами нужен ответ на вопрос «что мне писал вот этот». И раньше же
+короткая сводка приходила лентой в переписку: журнал так не сохранить.
 """
 import asyncio
 
@@ -48,6 +49,15 @@ def deliver(title="🔇 **Перехваченное**"):
     return state.api
 
 
+def caption(api=None) -> str:
+    """Подпись к файлу — то, что владелец видит, не открывая его."""
+    return (api or state.api).captions[-1]
+
+
+def dump(api=None) -> str:
+    return (api or state.api).uploads[-1].decode()
+
+
 def two_chats(per_chat=3):
     for i in range(per_chat):
         put(VASYA, "Вася", f"вася {i}", at=100 + i)
@@ -78,7 +88,7 @@ def test_group_survives_rows_without_a_chat():
 def test_short_list_is_split_by_chat():
     two_chats(2)
     api = deliver()
-    text = api.texts_to(OWNER)[-1]
+    text = caption(api)
     assert f"`{VASYA}`" in text and f"`{MARINA}`" in text, "id чата виден"
     assert text.count("💬") == 2, "по заголовку на чат"
     # Сообщения одного чата идут подряд, а не вперемешку по времени.
@@ -89,7 +99,7 @@ def test_short_list_is_split_by_chat():
 def test_sender_name_is_dropped_when_the_chat_has_only_one():
     """В личке имя на каждой строке — это одно и то же слово шесть раз."""
     two_chats(3)
-    text = deliver().texts_to(OWNER)[-1]
+    text = caption(deliver())
     assert text.count("Вася") == 1, "имя только в заголовке чата"
 
 
@@ -97,7 +107,7 @@ def test_sender_name_stays_when_the_chat_has_several():
     """В группе отправители разные — без имени строка бесполезна."""
     put(VASYA, "Вася", "раз", at=1)
     put(VASYA, "Петя", "два", at=2)
-    lines = deliver().texts_to(OWNER)[-1].splitlines()
+    lines = caption(deliver()).splitlines()
     signed = [line for line in lines if line.startswith("• ")]
     assert len(signed) == 2
     assert all("**" in line for line in signed), "у каждой строки свой отправитель"
@@ -106,12 +116,12 @@ def test_sender_name_stays_when_the_chat_has_several():
 def test_reason_marker_only_where_reasons_differ():
     put(VASYA, "Вася", "мут", at=1, reason="mute")
     put(MARINA, "Марина", "не беспокоить", at=2, reason="dnd")
-    only_one_kind = deliver().texts_to(OWNER)[-1]
+    only_one_kind = caption(deliver())
     assert "🔇" not in only_one_kind.replace("🔇 **Перехваченное**", ""), \
         "в каждом чате причина одна — помечать нечего"
 
     put(VASYA, "Вася", "и так тоже", at=3, reason="dnd")
-    mixed = deliver().texts_to(OWNER)[-1]
+    mixed = caption(deliver())
     assert "🌙" in mixed, "в чате две причины — показываем, какая где"
 
 
@@ -177,24 +187,56 @@ def test_grouped_file_of_nothing_does_not_crash():
 
 # ------------------------------------------------------------- порог -------
 
-def test_the_threshold_decides_list_or_file():
-    """Ровно на пороге — ещё список, на единицу больше — уже файл."""
+def test_the_threshold_only_decides_what_goes_into_the_caption():
+    """Файл приходит в любом случае — порог решает лишь судьбу дубля в подписи."""
     two_chats(digest.LIST_LIMIT // 2)
     api = deliver()
-    assert not api.files and api.texts_to(OWNER)
+    assert api.files
+    assert "марина 0" in caption(api), "коротко — показываем прямо в подписи"
 
-    put(VASYA, "Вася", "лишнее", at=777)
+    for i in range(digest.LIST_LIMIT):
+        put(VASYA, "Вася", f"лишнее {i}", at=700 + i)
     api = deliver()
-    assert api.files, "перевалили за порог — должен быть файл"
+    assert api.files
+    assert "лишнее 0" not in caption(api), "длинное в подпись не лезет"
+    assert "сообщений:" in caption(api), "тогда в подписи — счёт"
 
 
-def test_zero_threshold_always_sends_a_file(monkeypatch):
-    """Кому список не нужен вовсе — DIGEST_LIST_LIMIT=0."""
+def test_zero_threshold_leaves_only_the_file(monkeypatch):
+    """Кому дубль в подписи не нужен вовсе — DIGEST_LIST_LIMIT=0."""
     monkeypatch.setattr(digest, "LIST_LIMIT", 0)
     put(VASYA, "Вася", "одно-единственное", at=1)
     api = deliver()
-    assert api.files, "при нулевом пороге даже одно сообщение уходит файлом"
+    assert api.files
+    assert "одно-единственное" not in caption(api)
+    assert "одно-единственное" in dump(api), "в файле оно всё равно есть"
 
 
 def test_the_threshold_comes_from_config():
     assert digest.LIST_LIMIT == config.DIGEST_LIST_LIMIT
+
+
+def test_even_a_single_message_arrives_as_a_file():
+    """Ради этого всё и затевалось: журнал должен быть файлом всегда."""
+    put(VASYA, "Вася", "одно сообщение", at=1)
+    api = deliver()
+    assert api.files, "файл обязан быть даже на одно сообщение"
+    assert api.files[-1][1].endswith(".txt")
+    assert "одно сообщение" in dump(api)
+    assert "одно сообщение" in caption(api), "и в подписи тоже — открывать незачем"
+
+
+def test_nothing_is_sent_as_a_plain_list_any_more():
+    two_chats(2)
+    api = deliver()
+    assert api.texts_to(OWNER) == [], "лента в переписке с ботом больше не нужна"
+
+
+def test_a_caption_too_long_for_telegram_falls_back_to_counts():
+    """1024 символа — предел подписи; обрезанная сводка хуже, чем её отсутствие."""
+    for i in range(digest.LIST_LIMIT):
+        put(VASYA, "Вася", "очень длинное сообщение " * 12, at=100 + i)
+    api = deliver()
+    text = caption(api)
+    assert len(text) <= digest.CAPTION_ROOM
+    assert "сообщений:" in text and "…" not in text.split("\n")[-1]

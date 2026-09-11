@@ -97,8 +97,8 @@ DND_NOTICE_EVERY: int = _int("DND_NOTICE_EVERY", 6 * 3600)
 
 # Массовое удаление (очистка переписки) — одним файлом вместо сотни карточек.
 PURGE_THRESHOLD: int = _int("PURGE_THRESHOLD", 5)
-# Сколько перехваченных ещё влезает в список. Больше — уходит файлом;
-# 0 — файлом всегда, даже одно сообщение.
+# Журнал перехваченного всегда приходит файлом. Это — сколько сообщений
+# продублировать прямо в подписи к нему; 0 — не дублировать вовсе.
 DIGEST_LIST_LIMIT: int = _int("DIGEST_LIST_LIMIT", 10)
 PURGE_DEBOUNCE_SEC: float = _float("PURGE_DEBOUNCE_SEC", 3.0)
 PURGE_MEDIA_LIMIT: int = _int("PURGE_MEDIA_LIMIT", 10)
