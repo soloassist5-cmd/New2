@@ -193,3 +193,131 @@ def test_slash_command_reports_by_id():
         "message_id": 1, "date": NOW, "chat": {"id": OWNER, "type": "private"},
         "from": {"id": OWNER, "first_name": "Я"}, "text": f"/dox {VASYA}"}))
     assert "сохранено сообщений: **4**" in api.texts[-1]
+
+
+# ------------------------------------------------------- история имён ------
+
+def alias(name, username=None, user=VASYA):
+    db.forget_aliases()                    # иначе кэш процесса съест изменение
+    return asyncio.run(db.note_alias(OWNER, user, name, username))
+
+
+def test_a_name_is_recorded_once_not_on_every_message():
+    assert alias("Вася", "vasya") is False, "первое имя — не переименование"
+    assert alias("Вася", "vasya") is False
+    rows = asyncio.run(db.aliases(OWNER, VASYA))
+    assert len(rows) == 1
+
+
+def test_a_rename_adds_a_row_and_closes_the_previous_one():
+    alias("Вася", "vasya")
+    assert alias("Пётр", "petya") is True
+    rows = asyncio.run(db.aliases(OWNER, VASYA))
+    assert [row["name"] for row in rows] == ["Пётр", "Вася"]
+    assert rows[1]["last_seen"] >= rows[1]["first_seen"]
+
+
+def test_a_username_change_alone_counts_as_a_rename():
+    alias("Вася", "vasya")
+    assert alias("Вася", "vasya2") is True
+
+
+def test_card_lists_previous_names_but_not_the_current_one():
+    cached()
+    alias("Вася", "vasya")
+    alias("Василий П.", "vasya")
+    alias("Вася Пупкин", "vasya_new")
+    text = card(user=PROFILE)
+    assert "Раньше звали иначе" in text
+    assert "Василий П." in text and "@vasya)" in text
+    assert text.count("Вася Пупкин") == 1, "текущее имя — только в шапке"
+
+
+def test_the_short_name_fallback_steps_aside_for_real_history():
+    """Две версии «раньше звали» в одной карточке — это каша."""
+    cached()
+    alias("Вася", "vasya")
+    alias("Пётр Иванов", "petya")
+    text = card(user=dict(PROFILE, first_name="Пётр", last_name="Иванов"))
+    assert "раньше был(а)" not in text
+    assert "Раньше звали иначе" in text
+
+
+def test_alias_is_recorded_from_a_real_message():
+    from bot import business
+
+    api = state.api
+    asyncio.run(business.on_business_message(api, business_message(
+        "привет", chat_id=VASYA, from_id=VASYA, first_name="Вася")))
+    rows = asyncio.run(db.aliases(OWNER, VASYA))
+    assert [row["name"] for row in rows] == ["Вася"]
+
+
+def test_the_owners_own_messages_do_not_build_a_history_on_themselves():
+    from bot import business
+
+    api = state.api
+    asyncio.run(business.on_business_message(api, business_message(
+        "это я", chat_id=VASYA, from_id=OWNER, first_name="Я")))
+    assert asyncio.run(db.aliases(OWNER, OWNER)) == []
+
+
+# ---------------------------------------------------------- как пишет ------
+
+def at_hour(hour, day=0, minute=0):
+    base = 1_757_600_000 - (1_757_600_000 % 86400)
+    return base + day * 86400 + hour * 3600 + minute * 60
+
+
+def wrote(stamps, user=VASYA):
+    for i, stamp in enumerate(stamps):
+        asyncio.run(db.cache_message(OWNER, user, i, user, True, f"т{i}",
+                                     None, None, None, stamp, user_name="Вася"))
+
+
+def test_a_handful_of_messages_is_not_a_habit():
+    wrote([at_hour(23, day=d) for d in range(5)])
+    assert "Как пишет" not in card()
+
+
+def test_the_usual_hours_are_reported():
+    wrote([at_hour(23, day=d, minute=m)
+           for d in range(10) for m in (0, 20, 40)])
+    text = card()
+    assert "Как пишет" in text and "чаще пишет с" in text
+
+
+def test_a_night_writer_is_flagged():
+    wrote([at_hour(2, day=d, minute=m) for d in range(10) for m in (0, 30, 50)])
+    assert "ночью" in card()
+
+
+def test_a_daytime_writer_is_not_called_nocturnal():
+    wrote([at_hour(14, day=d, minute=m) for d in range(10) for m in (0, 30, 50)])
+    assert "ночью" not in card()
+
+
+def test_a_long_silence_is_noticed():
+    stamps = [at_hour(12, day=d) for d in range(10)]
+    stamps += [at_hour(12, day=d) for d in range(30, 40)]
+    wrote(stamps)
+    assert "молчал(а)" in card()
+
+
+def test_a_chatty_day_shows_an_average():
+    wrote([at_hour(12, day=d, minute=m)
+           for d in range(10) for m in (0, 10, 20)])
+    assert "сообщений в день" in card()
+
+
+# ----------------------------------------------------- дата регистрации ----
+
+def test_the_card_dates_the_account_from_its_number():
+    cached()
+    assert "заведён примерно" in card(user=PROFILE)
+
+
+def test_an_unknown_person_still_gets_the_account_age():
+    text = card(350_000_000)
+    assert "ничего нет" in text
+    assert "Судя по номеру" in text and "2017" in text

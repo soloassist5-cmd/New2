@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS allowlist (
     PRIMARY KEY (owner_id, user_id)
 );
 
+-- Как человека звали, когда бот видел его в прошлый раз. Только собственные
+-- наблюдения: наружу за историей имён бот не ходит.
+CREATE TABLE IF NOT EXISTS aliases (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    name       TEXT,
+    username   TEXT,
+    first_seen INTEGER NOT NULL,
+    last_seen  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alias ON aliases(owner_id, user_id, first_seen);
+
 CREATE TABLE IF NOT EXISTS settings (
     owner_id   INTEGER NOT NULL,
     chat_id    INTEGER NOT NULL,
@@ -515,6 +528,55 @@ async def clear_intercepted(owner_id: int, *, chat_id: int | None = None,
     return cur.rowcount or 0
 
 
+# Как звали человека в прошлый раз — чтобы не ходить в базу на каждое сообщение.
+_alias_cache: dict[tuple[int, int], tuple[str | None, str | None]] = {}
+
+
+def forget_aliases() -> None:
+    _alias_cache.clear()
+
+
+async def note_alias(owner_id: int, user_id: int, name: str | None,
+                     username: str | None) -> bool:
+    """Запоминает имя, если оно изменилось. True — было переименование."""
+    if not user_id or not (name or username):
+        return False
+    key = (owner_id, user_id)
+    if _alias_cache.get(key) == (name, username):
+        return False
+
+    last = await fetchone(
+        "SELECT * FROM aliases WHERE owner_id=? AND user_id=? "
+        "ORDER BY first_seen DESC, id DESC LIMIT 1", (owner_id, user_id))
+    moment = now()
+    if last is not None and (last["name"], last["username"]) == (name, username):
+        _alias_cache[key] = (name, username)
+        return False
+
+    if last is not None:
+        await execute("UPDATE aliases SET last_seen=? WHERE id=?",
+                      (moment, last["id"]))
+    await execute(
+        "INSERT INTO aliases(owner_id,user_id,name,username,first_seen,last_seen) "
+        "VALUES (?,?,?,?,?,?)", (owner_id, user_id, name, username, moment, moment))
+    _alias_cache[key] = (name, username)
+    return last is not None
+
+
+async def aliases(owner_id: int, user_id: int, limit: int = 10):
+    return await fetchall(
+        "SELECT * FROM aliases WHERE owner_id=? AND user_id=? "
+        "ORDER BY first_seen DESC, id DESC LIMIT ?", (owner_id, user_id, limit))
+
+
+async def message_times(owner_id: int, user_id: int, limit: int = 5000):
+    """Когда человек писал — для портрета активности. Только даты, без текста."""
+    rows = await fetchall(
+        "SELECT date FROM messages WHERE owner_id=? AND user_id=? "
+        "ORDER BY date LIMIT ?", (owner_id, user_id, limit))
+    return [row["date"] for row in rows]
+
+
 async def dossier(owner_id: int, user_id: int, chat_id: int | None = None) -> dict:
     """Всё, что бот успел записать про человека. Только своя база, без разведки."""
     msgs = await fetchone(
@@ -831,6 +893,8 @@ async def cleanup() -> tuple[int, int]:
     await conn().execute("DELETE FROM edits WHERE edited_at < ?", (cutoff2,))
     await conn().execute("DELETE FROM intercepted WHERE at < ?", (cutoff2,))
     await conn().execute("DELETE FROM urgent_calls WHERE at < ?", (cutoff2,))
+    # Историю имён по сроку не чистим: она маленькая, а её ценность как раз в
+    # том, что она длинная. Уходит только вместе с самим человеком.
     await conn().commit()
     return a, b
 

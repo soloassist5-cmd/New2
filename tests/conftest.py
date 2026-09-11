@@ -16,3 +16,15 @@ os.environ.setdefault("ANIM_DELAY", "0")
 os.environ["OWNER_ID"] = "0"      # администратора тесты задают сами
 os.environ["BACKUP_EVERY_MIN"] = "0"   # фоновые копии включает только их тест
 os.environ["DB_PATH"] = str(Path(tempfile.mkdtemp()) / "test.sqlite3")
+
+import pytest  # noqa: E402 — только после того, как окружение готово
+
+
+@pytest.fixture(autouse=True)
+def _clean_process_caches():
+    """Кэши живут в модулях, а база у каждого теста своя — иначе течёт."""
+    import db
+
+    db.forget_aliases()
+    yield
+    db.forget_aliases()

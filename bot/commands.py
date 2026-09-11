@@ -574,6 +574,8 @@ async def reload_state() -> None:
     await state.load_mutes()
     await state.load_allowlist()
     chatprefs.invalidate_all()
+    # База другая — значит и «как его звали в прошлый раз» другое.
+    db.forget_aliases()
 
 
 async def handle(api, message: dict) -> None:

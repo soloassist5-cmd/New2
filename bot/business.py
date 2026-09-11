@@ -194,6 +194,11 @@ async def _cache(owner_id: int, message: dict, connection_id: str) -> None:
         business_id=connection_id,
         user_name=parse.display_name(sender),
     )
+    # Имя и @username берём из каждого сообщения: Telegram историю смены не
+    # отдаёт, но то, что бот видел своими глазами, он записать может.
+    if sender.get("id") != owner_id:
+        await db.note_alias(owner_id, sender.get("id"),
+                            parse.display_name(sender), sender.get("username"))
 
 
 async def _intercept(api, owner_id: int, message: dict, connection_id: str, *,
