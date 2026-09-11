@@ -141,10 +141,10 @@ def test_transcript_reports_what_was_not_cached():
     assert "не было в кэше: 14" in state.api.captions[0]
 
 
-def test_empty_cache_still_reports_the_purge():
+def test_empty_cache_reports_the_purge_without_an_empty_file():
     purge(range(1, 30))
-    assert len(state.api.files) == 1
-    assert "не сохранилось" in transcript_text()
+    assert state.api.files == [], "пустой файл отправлять незачем"
+    assert any("Удалено сообщений: 29" in text for text in state.api.texts)
 
 
 # ----------------------------------------------------------------- медиа ----
@@ -297,3 +297,60 @@ def test_the_waiting_task_finishes_cleanly():
         assert task.done() and not task.cancelled(), "оборвалась на полпути"
         assert business._pending == {}, "пачка разобрана и убрана"
     asyncio.run(scenario())
+
+
+# ------------------------------------------------ ничего не теряется молча --
+# Бот молчал, если удалённых сообщений не было в его памяти. Со стороны это
+# неотличимо от поломки: удалили несколько — в ответ тишина.
+
+def test_deletion_of_unknown_messages_is_still_reported():
+    api = run_with_window(lambda: fill_chat(0), [1, 2])
+    assert any("Удалено сообщений: 2" in text for text in api.texts)
+    assert any("нет в моей памяти" in text for text in api.texts)
+
+
+def test_single_unknown_deletion_is_reported_too():
+    api = run_with_window(lambda: fill_chat(0), [1])
+    assert any("Удалено сообщений: 1" in text for text in api.texts)
+
+
+def test_partial_coverage_says_what_was_lost():
+    api = run_with_window(lambda: fill_chat(1), [1, 2, 3])
+    assert sum("Удалённое сообщение" in text for text in api.texts) == 1
+    assert any("удалено ещё **2**" in text for text in api.texts)
+
+
+def test_full_coverage_adds_no_note():
+    api = run_with_window(lambda: fill_chat(2), [1, 2])
+    assert sum("Удалённое сообщение" in text for text in api.texts) == 2
+    assert not any("нет в моей памяти" in text for text in api.texts)
+
+
+def test_the_report_names_the_storage_period():
+    """Владельцу должно быть понятно, почему сообщений нет."""
+    api = run_with_window(lambda: fill_chat(0), [1, 2])
+    notice = [text for text in api.texts if "нет в моей памяти" in text][0]
+    assert "30 дней" in notice
+
+
+def test_one_broken_card_does_not_eat_the_others():
+    calls = {"n": 0}
+    original = business.reporter.send_report
+
+    async def flaky(owner_id, text, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Telegram не принял")
+        return await original(owner_id, text, **kwargs)
+
+    business.reporter.send_report = flaky
+    try:
+        api = run_with_window(lambda: fill_chat(3), [1, 2, 3])
+        assert sum("Удалённое сообщение" in text for text in api.texts) == 2
+    finally:
+        business.reporter.send_report = original
+
+
+def test_cache_keeps_messages_long_enough_to_be_useful():
+    """Двух суток мало: удаляют обычно не самое свежее."""
+    assert config.CACHE_TTL_HOURS >= 24 * 7

@@ -386,6 +386,23 @@ async def flush_pending() -> None:
         await flush(key)
 
 
+UNKNOWN_CARD = (
+    "🗑 **Удалено сообщений: {count}**\n"
+    "💬 {where}\n"
+    "🕒 {when}\n\n"
+    "Показать нечего: этих сообщений нет в моей памяти. Значит, они старше "
+    "срока хранения ({ttl}) или пришли до того, как я был подключён."
+)
+MISSING_NOTE = (
+    "🗑 Там же удалено ещё **{count}** — их нет в моей памяти: старше срока "
+    "хранения ({ttl}) или пришли до подключения."
+)
+
+
+def _ttl_words() -> str:
+    return fmt.human_delta(config.CACHE_TTL_HOURS * 3600)
+
+
 async def flush(key: tuple[int, int]) -> None:
     batch = _pending.pop(key, None)
     if batch is None:
@@ -400,14 +417,30 @@ async def flush(key: tuple[int, int]) -> None:
     ids = list(dict.fromkeys(batch.ids))
     rows = await db.get_messages(owner_id, chat_id, ids)
     where = parse.chat_title(batch.chat)
+    log.info("удалений %s в чате %s: нашлось в памяти %s",
+             len(ids), chat_id, len(rows))
+
+    # Молчать нельзя: владелец не отличит «ничего не удаляли» от «бот сломался».
+    if not rows:
+        await reporter.send_report(owner_id, UNKNOWN_CARD.format(
+            count=len(ids), where=where, when=fmt.ts(db.now()), ttl=_ttl_words()))
+        return
 
     if len(ids) < config.PURGE_THRESHOLD:
         for row in rows:
-            await db.add_deleted(dict(row))
-            await reporter.send_report(
-                owner_id, await _deleted_card(row, where),
-                file_id=row["file_id"], media_type=row["media_type"])
+            try:
+                await db.add_deleted(dict(row))
+                await reporter.send_report(
+                    owner_id, await _deleted_card(row, where),
+                    file_id=row["file_id"], media_type=row["media_type"])
+            except Exception:                                # noqa: BLE001
+                # Одна сорвавшаяся карточка не должна съесть остальные.
+                log.exception("карточка удаления %s не ушла", row["msg_id"])
         await db.drop_messages(owner_id, chat_id, [row["msg_id"] for row in rows])
+        missing = len(ids) - len(rows)
+        if missing:
+            await reporter.send_report(owner_id, MISSING_NOTE.format(
+                count=missing, ttl=_ttl_words()))
         return
 
     await _report_purge(owner_id, chat_id, rows, ids, where)

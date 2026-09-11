@@ -265,7 +265,7 @@ docker compose logs -f
 | `PREFIX` | `.` | префикс команд в переписке |
 | `MUTE_ANIM` | `type` | `type` / `bar` / `off` — стиль анимации |
 | `ANTIDELETE_GROUPS` | `0` | антиудаление в группах (только юзербот) |
-| `CACHE_TTL_HOURS` | `48` | сколько держать кэш сообщений |
+| `CACHE_TTL_HOURS` | `720` | сколько держать сообщения в памяти (30 дней) |
 | `BACKUP_EVERY_MIN` | `60` | период копии базы |
 | `BACKUP_SOON_SEC` | `60` | через сколько сохранять копию после правки настроек |
 | `PURGE_THRESHOLD` | `5` | с какого числа удалений слать сводку файлом |
@@ -278,7 +278,7 @@ docker compose logs -f
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q        # 329 тестов
+pytest -q        # 336 тестов
 ruff check .
 ```
 

@@ -42,8 +42,6 @@ def env():
     approve(OWNER, OWNER_CHAT)
     state.client = None
     state.log_entity = None
-    state.owner_id = 0
-    state.owner_chat_id = 0
     state.api = FakeBotAPI()
     yield
     config.OWNER_ID = 0
@@ -204,11 +202,13 @@ def test_deleted_photo_is_resent_by_file_id():
     assert api.media and api.media[-1][1] == "AgACgone"
 
 
-def test_unknown_message_id_is_skipped():
+def test_unknown_message_id_is_still_reported():
+    """Молчание неотличимо от поломки: сказать про удаление надо в любом случае."""
     api = connect()
-    before = len(api.sent)
+    api.sent.clear()
     asyncio.run(business.on_deleted_business_messages(state.api, deleted_update([999])))
-    assert len(api.sent) == before
+    assert any("Удалено сообщений: 1" in text for text in api.texts)
+    assert any("нет в моей памяти" in text for text in api.texts)
 
 
 def test_own_deletion_in_one_chat_does_not_silence_another():

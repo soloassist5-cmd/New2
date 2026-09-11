@@ -62,7 +62,7 @@ DB_PATH: Path = Path(os.getenv("DB_PATH", "data/guard.sqlite3"))
 if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 
-CACHE_TTL_HOURS: int = _int("CACHE_TTL_HOURS", 48)
+CACHE_TTL_HOURS: int = _int("CACHE_TTL_HOURS", 24 * 30)
 DELETED_TTL_DAYS: int = _int("DELETED_TTL_DAYS", 30)
 MAX_MEDIA_MB: int = _int("MAX_MEDIA_MB", 25)
 
