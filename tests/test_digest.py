@@ -173,3 +173,28 @@ def test_grouped_file_of_nothing_does_not_crash():
     assert stats == {"total": 0, "chats": 0, "media": 0, "first": None,
                      "last": None}
     assert "Пусто" in payload.decode()
+
+
+# ------------------------------------------------------------- порог -------
+
+def test_the_threshold_decides_list_or_file():
+    """Ровно на пороге — ещё список, на единицу больше — уже файл."""
+    two_chats(digest.LIST_LIMIT // 2)
+    api = deliver()
+    assert not api.files and api.texts_to(OWNER)
+
+    put(VASYA, "Вася", "лишнее", at=777)
+    api = deliver()
+    assert api.files, "перевалили за порог — должен быть файл"
+
+
+def test_zero_threshold_always_sends_a_file(monkeypatch):
+    """Кому список не нужен вовсе — DIGEST_LIST_LIMIT=0."""
+    monkeypatch.setattr(digest, "LIST_LIMIT", 0)
+    put(VASYA, "Вася", "одно-единственное", at=1)
+    api = deliver()
+    assert api.files, "при нулевом пороге даже одно сообщение уходит файлом"
+
+
+def test_the_threshold_comes_from_config():
+    assert digest.LIST_LIMIT == config.DIGEST_LIST_LIMIT

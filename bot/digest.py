@@ -6,11 +6,13 @@
 """
 from __future__ import annotations
 
+import config
 import db
 from bot import transcript
 from core import fmt, mediastore, reporter
 
-LIST_LIMIT = 12          # больше — уже нечитаемо, отправляем файлом
+# Больше — уже нечитаемо, отправляем файлом. 0 — файлом всегда.
+LIST_LIMIT = config.DIGEST_LIST_LIMIT
 REASON_ICON = {"mute": "🔇", "dnd": "🌙"}
 
 
