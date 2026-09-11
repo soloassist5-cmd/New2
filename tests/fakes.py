@@ -27,6 +27,8 @@ class FakeBotAPI:
         self.edit_markups: list[dict] = []
         self.stickers: list[tuple] = []
         self.sticker_uploads: list[tuple] = []
+        self.silent_stickers: list[bool] = []
+        self.deleted_plain: list[tuple[int, int]] = []
         self.dice: list[tuple] = []
         self._ids = itertools.count(1000)
 
@@ -69,14 +71,22 @@ class FakeBotAPI:
         self.deleted.append((business_connection_id, list(message_ids)))
         return True
 
-    async def send_sticker(self, chat_id, sticker, *, business_connection_id=None):
+    async def send_sticker(self, chat_id, sticker, *, business_connection_id=None,
+                           disable_notification=False):
         self.stickers.append((chat_id, sticker, business_connection_id))
+        self.silent_stickers.append(bool(disable_notification))
         return {"message_id": next(self._ids), "sticker": {"file_id": "CACHED1"}}
 
     async def upload_sticker(self, chat_id, data, filename, *,
-                             business_connection_id=None):
+                             business_connection_id=None,
+                             disable_notification=False):
         self.sticker_uploads.append((chat_id, data))
+        self.silent_stickers.append(bool(disable_notification))
         return {"message_id": next(self._ids), "sticker": {"file_id": "NEW1"}}
+
+    async def delete_message(self, chat_id, message_id):
+        self.deleted_plain.append((chat_id, message_id))
+        return True
 
     async def send_dice(self, chat_id, emoji, *, business_connection_id=None):
         self.dice.append((chat_id, emoji, business_connection_id))

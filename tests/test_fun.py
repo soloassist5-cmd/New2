@@ -21,6 +21,7 @@ def env():
     chatprefs.invalidate_all()
     config.OWNER_ID = OWNER
     funcmd.SPEED = 0                      # анимацию в тестах не ждём
+    fun.forget_drawn()
     state.users.clear()
     state.business.clear()
     state.mutes.clear()
@@ -212,3 +213,58 @@ def test_fun_commands_are_grouped_separately():
 def test_fun_commands_are_visible_in_the_chat():
     for name in ("rose", "dice", "roll", "8ball"):
         assert dotcmd.REGISTRY[name].visible, name
+
+
+# ------------------------------------------------------- вес и прогрев ------
+
+def test_sticker_stays_light_enough_to_appear_at_once():
+    """Lossless давал до 170 КБ — собеседник успевал увидеть заглушку загрузки."""
+    for emoji, _ in funcmd.STICKERS.values():
+        payload = fun.render(emoji)
+        assert payload, emoji
+        assert len(payload) < 70_000, f"{emoji}: {len(payload) // 1024} КБ — тяжело"
+
+
+def test_drawing_is_cached_in_memory():
+    """Второй раз Pillow не запускаем: на сложном эмодзи это секунды."""
+    assert asyncio.run(fun.draw("🌹"))
+    calls = []
+    real = fun.render
+    try:
+        fun.render = lambda emoji: calls.append(emoji) or real(emoji)
+        assert asyncio.run(fun.draw("🌹"))
+    finally:
+        fun.render = real
+    assert calls == [], "перерисовали уже нарисованное"
+
+
+def test_failed_drawing_is_not_remembered(monkeypatch):
+    """Шрифт могли поставить позже — «не вышло» запоминать нельзя."""
+    monkeypatch.setattr(fun, "FONT_PATHS", ())
+    assert asyncio.run(fun.draw("🌹")) is None
+    monkeypatch.undo()
+    assert asyncio.run(fun.draw("🌹")), "вторая попытка должна нарисовать"
+
+
+def test_warmup_uploads_once_and_leaves_no_trace():
+    """Прогрев: file_id заранее, беззвучно и без следа в переписке владельца."""
+    api = FakeBotAPI()
+    ready = asyncio.run(fun.warmup(api, OWNER, ["🌹", "🔥"]))
+    assert ready == 2
+    assert len(api.sticker_uploads) == 2
+    assert all(api.silent_stickers), "прогрев не должен звенеть уведомлением"
+    assert len(api.deleted_plain) == 2, "прогревочные сообщения убраны"
+
+    again = asyncio.run(fun.warmup(api, OWNER, ["🌹", "🔥"]))
+    assert again == 2 and len(api.sticker_uploads) == 2, "повторно не грузим"
+
+
+def test_warmup_gives_up_when_the_chat_is_unreachable():
+    """Владелец не начинал диалог с ботом — десять раз стучаться незачем."""
+    api = FakeBotAPI()
+
+    async def refuse(*a, **kw):
+        raise RuntimeError("Forbidden: bot can't initiate conversation with a user")
+
+    api.upload_sticker = refuse
+    assert asyncio.run(fun.warmup(api, OWNER, ["🌹", "🔥", "🐱", "🎉"])) == 0

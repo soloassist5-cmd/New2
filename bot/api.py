@@ -142,15 +142,20 @@ class BotAPI:
                                message_id=message_id, reply_markup=reply_markup)
 
     async def send_sticker(self, chat_id: int, sticker: str, *,
-                           business_connection_id: str | None = None) -> dict:
+                           business_connection_id: str | None = None,
+                           disable_notification: bool = False) -> dict:
         return await self.call("sendSticker", chat_id=chat_id, sticker=sticker,
-                               business_connection_id=business_connection_id)
+                               business_connection_id=business_connection_id,
+                               disable_notification=disable_notification or None)
 
     async def upload_sticker(self, chat_id: int, data: bytes, filename: str, *,
-                             business_connection_id: str | None = None) -> dict:
+                             business_connection_id: str | None = None,
+                             disable_notification: bool = False) -> dict:
         return await self.upload("sendSticker", "sticker", data, filename,
                                  chat_id=chat_id,
-                                 business_connection_id=business_connection_id)
+                                 business_connection_id=business_connection_id,
+                                 disable_notification=(
+                                     "true" if disable_notification else None))
 
     async def send_dice(self, chat_id: int, emoji: str, *,
                         business_connection_id: str | None = None) -> dict:

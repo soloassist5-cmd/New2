@@ -99,7 +99,7 @@ DND_NOTICE_EVERY: int = _int("DND_NOTICE_EVERY", 6 * 3600)
 PURGE_THRESHOLD: int = _int("PURGE_THRESHOLD", 5)
 PURGE_DEBOUNCE_SEC: float = _float("PURGE_DEBOUNCE_SEC", 3.0)
 PURGE_MEDIA_LIMIT: int = _int("PURGE_MEDIA_LIMIT", 10)
-ANIM_DELAY: float = _float("ANIM_DELAY", 0.4)
+ANIM_DELAY: float = _float("ANIM_DELAY", 0.6)
 
 BACKUP_EVERY_MIN: int = _int("BACKUP_EVERY_MIN", 60)
 # Настройки меняются редко, но терять их обиднее всего: после правки

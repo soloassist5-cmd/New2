@@ -29,7 +29,7 @@ services:
       - key: MUTE_ANIM
         value: type
       - key: ANIM_DELAY
-        value: "0.4"
+        value: "0.6"
       # Диск на free-плане эфемерный: бот присылает копию базы себе в чат,
       # обратная пересылка файла её восстанавливает.
       - key: BACKUP_EVERY_MIN

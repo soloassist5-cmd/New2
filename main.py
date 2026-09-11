@@ -154,6 +154,26 @@ async def start_transport(api, stop: asyncio.Event) -> list[asyncio.Task]:
     return [asyncio.create_task(poller.run(api, stop))]
 
 
+async def warm_stickers(api) -> None:
+    """Первый `.rose` не должен ждать: картинки загружаются заранее.
+
+    Отрисовка сложного эмодзи занимает до трёх секунд, загрузка — ещё сколько-то,
+    и всё это собеседник видит как «команда исчезла, а картинки нет». После
+    прогрева стикер уходит по готовому file_id, то есть сразу.
+    """
+    from bot import fun, funcmd
+
+    owner = state.admin_id() or config.OWNER_ID
+    if not owner:
+        return
+    try:
+        ready = await fun.warmup(api, owner,
+                                 [emoji for emoji, _ in funcmd.STICKERS.values()])
+        log.info("стикеров наготове: %s из %s", ready, len(funcmd.STICKERS))
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("прогрев стикеров не удался: %r", e)
+
+
 async def announce_restart() -> None:
     """Дописывает «перезапущен» к сообщению, из которого вызвали .restart."""
     chat = await db.kv_get("restart_chat")
@@ -223,6 +243,8 @@ async def run() -> None:
         f"🔇 мутов восстановлено: {len(state.mutes)}\n"
         f"👥 пользователей: {len(state.owners())}"
     )
+    if api is not None:
+        tasks.append(asyncio.create_task(warm_stickers(api)))
 
     try:
         if client is not None:

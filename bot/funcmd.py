@@ -15,7 +15,8 @@ from core import anim, fmt
 log = logging.getLogger("funcmd")
 
 CAT = "Развлечения"
-CAT_DELAY = 0.6
+CAT_DELAY = 0.7
+TYPE_DELAY = 0.55
 SPEED = 1.0          # множитель пауз; тесты выставляют 0, чтобы не ждать
 
 # Стикеры, у которых есть своя короткая команда. Всё остальное — через `.e`.
@@ -59,13 +60,17 @@ async def _post(ctx: BizCtx, text: str) -> BizMessage | None:
 
 
 async def _animate(ctx: BizCtx, frames: list[str], *, delay: float = CAT_DELAY) -> None:
+    """Первый кадр — отправка, остальные — правки с ровным шагом.
+
+    Шаг держит core.anim: пауза между отправкой и первой правкой обязательна,
+    иначе клиент склеивает их и первый кадр собеседник не видит вовсе.
+    """
     message = await _post(ctx, frames[0])
     if message is None:
         return
     try:
-        for frame in frames[1:]:
-            await asyncio.sleep(delay * SPEED)
-            await anim.safe_edit(message, frame)
+        await anim.play_frames(message, frames[1:], delay=delay * SPEED,
+                               settle=anim.SETTLE * SPEED)
     except anim.Aborted:
         await anim.safe_edit_quiet(message, frames[-1])
 
@@ -73,8 +78,14 @@ async def _animate(ctx: BizCtx, frames: list[str], *, delay: float = CAT_DELAY) 
 # ----------------------------------------------------------------- стикеры --
 
 async def _sticker(ctx: BizCtx, emoji: str) -> None:
-    await ctx.drop_command()
-    if not await fun.send_sticker(ctx.api, ctx.chat_id, emoji, ctx.connection_id):
+    # Команду убираем и стикер шлём разом: ждать ответа Telegram на удаление
+    # незачем, а собеседник иначе видит паузу между исчезновением и картинкой.
+    dropped = asyncio.create_task(ctx.drop_command())
+    try:
+        sent = await fun.send_sticker(ctx.api, ctx.chat_id, emoji, ctx.connection_id)
+    finally:
+        await asyncio.gather(dropped, return_exceptions=True)
+    if sent is None:
         await ctx.private(f"Не получилось нарисовать {emoji} — "
                           "похоже, на сервере нет шрифта цветных эмодзи.")
 
@@ -106,12 +117,14 @@ async def cmd_emoji(ctx: BizCtx) -> None:
 def _register_dice() -> None:
     for name, (emoji, label) in DICE.items():
         async def handler(ctx: BizCtx, emoji: str = emoji) -> None:
-            await ctx.drop_command()
+            dropped = asyncio.create_task(ctx.drop_command())
             try:
                 await ctx.api.send_dice(ctx.chat_id, emoji,
                                         business_connection_id=ctx.connection_id)
             except Exception as e:                           # noqa: BLE001
                 log.warning("кубик не бросился: %r", e)
+            finally:
+                await asyncio.gather(dropped, return_exceptions=True)
 
         bizcmd(name, visible=True, cat=CAT,
                desc=f"{emoji} {label}, анимацию рисует Telegram")(handler)
@@ -133,7 +146,8 @@ async def cmd_type(ctx: BizCtx) -> None:
     if message is None:
         return
     try:
-        await anim.type_out(message, text)
+        await anim.type_out(message, text, delay=TYPE_DELAY * SPEED,
+                            settle=anim.SETTLE * SPEED)
     except anim.Aborted:
         await anim.safe_edit_quiet(message, text)
 
@@ -149,7 +163,7 @@ async def cmd_countdown(ctx: BizCtx) -> None:
 
 @bizcmd("love", visible=True, cat=CAT, desc="растущее сердце")
 async def cmd_love(ctx: BizCtx) -> None:
-    await _animate(ctx, ["🤍", "💗", "💖", "💝", "❤️‍🔥"], delay=0.5)
+    await _animate(ctx, ["🤍", "💗", "💖", "💝", "❤️‍🔥"], delay=0.6)
 
 
 @bizcmd("flip", visible=True, aliases=["coin"], cat=CAT, desc="подбросить монетку")
