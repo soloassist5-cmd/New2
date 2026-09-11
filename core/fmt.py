@@ -88,6 +88,13 @@ def ts(unix: int | None) -> str:
     return _dt.datetime.fromtimestamp(unix).strftime("%d.%m.%Y %H:%M:%S")
 
 
+def hm(unix: int | None) -> str:
+    """Короткая отметка для строк внутри списка, где дата уже есть в заголовке."""
+    if not unix:
+        return "—"
+    return _dt.datetime.fromtimestamp(unix).strftime("%d.%m %H:%M")
+
+
 def size(num: int) -> str:
     for unit in ("Б", "КБ", "МБ", "ГБ"):
         if num < 1024 or unit == "ГБ":
