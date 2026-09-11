@@ -487,6 +487,46 @@ async def count_intercepted(owner_id: int, *, since: int = 0) -> int:
         (owner_id, since))
 
 
+def _intercepted_scope(owner_id: int, chat_id: int | None,
+                       before: int | None) -> tuple[str, list]:
+    where, params = ["owner_id = ?"], [owner_id]
+    if chat_id is not None:
+        where.append("chat_id = ?")
+        params.append(chat_id)
+    if before is not None:
+        where.append("at < ?")
+        params.append(before)
+    return " AND ".join(where), params
+
+
+async def intercepted_in_scope(owner_id: int, *, chat_id: int | None = None,
+                               before: int | None = None) -> int:
+    """Сколько попадёт под чистку — показываем до того, как удалять."""
+    where, params = _intercepted_scope(owner_id, chat_id, before)
+    return await scalar(f"SELECT COUNT(*) FROM intercepted WHERE {where}", params)
+
+
+async def clear_intercepted(owner_id: int, *, chat_id: int | None = None,
+                            before: int | None = None) -> int:
+    """Чистит журнал перехваченного. Возвращает, сколько удалено."""
+    where, params = _intercepted_scope(owner_id, chat_id, before)
+    cur = await conn().execute(f"DELETE FROM intercepted WHERE {where}", params)
+    await conn().commit()
+    return cur.rowcount or 0
+
+
+async def intercepted_summary(owner_id: int) -> dict:
+    """Итог по журналу: сколько, из скольких чатов и с какого времени."""
+    row = await fetchone(
+        "SELECT COUNT(*) AS total, COUNT(DISTINCT chat_id) AS chats, "
+        "MIN(at) AS oldest, MAX(at) AS newest "
+        "FROM intercepted WHERE owner_id=?", (owner_id,))
+    if row is None:
+        return {"total": 0, "chats": 0, "oldest": None, "newest": None}
+    return {"total": row["total"] or 0, "chats": row["chats"] or 0,
+            "oldest": row["oldest"], "newest": row["newest"]}
+
+
 async def add_mute(owner_id: int, chat_id: int, user_id: int, until: int,
                    reason: str = "") -> None:
     await execute(

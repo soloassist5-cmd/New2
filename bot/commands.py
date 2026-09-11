@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, digest, dotcmd, parse, transcript, urgent
+from bot import access, clearlog, digest, dotcmd, parse, transcript, urgent
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -74,6 +74,7 @@ HELP = (
     "/ungmute — выключить\n"
     "/allow, /deny, /allowed — белый список для «не беспокоить»\n"
     "/intercepted [N] — что перехвачено мутом и «не беспокоить»\n"
+    "/clearlog — почистить журнал перехваченного\n"
     "/deleted [N] — последние удалённые\n"
     "/chats — чаты, где вы меняли настройки\n"
     "/urgent — срочные вызовы от собеседников\n"
@@ -101,6 +102,7 @@ MENU = (
     ("gmute", "не беспокоить: удалять сообщения всех"),
     ("ungmute", "выключить «не беспокоить»"),
     ("intercepted", "что перехвачено"),
+    ("clearlog", "почистить журнал перехваченного"),
     ("deleted", "последние удалённые сообщения"),
     ("chats", "чаты с изменёнными настройками"),
     ("urgent", "срочные вызовы от собеседников"),
@@ -344,6 +346,24 @@ async def cmd_intercepted(api, message: dict, args: str) -> None:
                          empty="🔇 Пока ничего не перехвачено.")
 
 
+async def cmd_clearlog(api, message: dict, args: str) -> None:
+    """Ручная чистка журнала перехваченного — всегда через подтверждение."""
+    chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
+    parsed = clearlog.parse_args(args)
+
+    if parsed is None:
+        text, keyboard = await clearlog.offer(owner_id)
+    elif parsed[0] == "chat":
+        target = parsed[1]
+        text, keyboard = await clearlog.offer_chat(
+            owner_id, target, await db.chat_title(owner_id, target) or "")
+    else:
+        text, keyboard = await clearlog.offer_days(owner_id, parsed[1])
+
+    await api.send_message(chat_id, text, reply_markup=keyboard)
+
+
 async def cmd_find(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
     owner_id = (message.get("from") or {}).get("id")
@@ -459,6 +479,7 @@ HANDLERS = {
     "allowed": cmd_allowed,
     "intercepted": cmd_intercepted,
     "muted": cmd_intercepted,
+    "clearlog": cmd_clearlog,
     "deleted": cmd_deleted,
     "find": cmd_find,
     "export": cmd_export,
@@ -599,9 +620,10 @@ async def _access_callback(api, query: dict, match: re.Match) -> None:
 
 
 async def handle_callback(api, query: dict) -> None:
-    """Кнопки есть только у заявок на доступ — больше бот ими не управляется."""
-    data = query.get("data") or ""
-    match = ACCESS_RE.match(data)
+    """Кнопки — только у заявок на доступ и у подтверждения чистки."""
+    if await clearlog.handle_callback(api, query):
+        return
+    match = ACCESS_RE.match(query.get("data") or "")
     if match is None:
         await api.answer_callback(query["id"])
         return

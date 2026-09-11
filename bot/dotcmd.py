@@ -332,6 +332,18 @@ async def cmd_muted(ctx: BizCtx) -> None:
 
 # ---------------------------------------------------------------- чистка ----
 
+@bizcmd("clearlog", args="", cat="Чистка", aliases=["clearmuted"],
+        desc="почистить журнал перехваченного этого чата")
+async def cmd_clearlog(ctx: BizCtx) -> None:
+    from bot import clearlog
+    from core import reporter
+
+    await ctx.drop_command()
+    title = await db.chat_title(ctx.owner_id, ctx.chat_id) or ""
+    text, keyboard = await clearlog.offer_chat(ctx.owner_id, ctx.chat_id, title)
+    await reporter.send_report(ctx.owner_id, text, reply_markup=keyboard)
+
+
 @bizcmd("del", args="(реплаем)", cat="Чистка", desc="удалить сообщение у всех", aliases=["d"])
 async def cmd_del(ctx: BizCtx) -> None:
     if not ctx.reply:
