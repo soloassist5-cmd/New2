@@ -157,6 +157,18 @@ def webapp_url() -> str:
     return WEBHOOK_URL.rstrip("/") + WEBAPP_PATH
 
 
+def webapp_why() -> str:
+    """Почему приложение недоступно. Пусто — значит доступно."""
+    if not WEBAPP:
+        return "выключено переменной WEBAPP=0"
+    if not BOT_TOKEN:
+        return "нет BOT_TOKEN"
+    if not WEBHOOK_URL:
+        return "нет публичного адреса (WEBHOOK_URL / RENDER_EXTERNAL_URL)"
+    if not WEBHOOK_URL.startswith("https://"):
+        return f"адрес не https: {WEBHOOK_URL}"
+    return ""
+
 
 def report_via_bot() -> bool:
     return bool(BOT_TOKEN)

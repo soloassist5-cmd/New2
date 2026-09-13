@@ -121,6 +121,20 @@ MENU = (
 )
 
 
+def webapp_keyboard() -> dict | None:
+    """Кнопка «открыть приложение» прямо в сообщении.
+
+    Синюю кнопку у поля ввода клиент Telegram кэширует и обновляет, когда сам
+    решит. Кнопка внутри сообщения приходит вместе с ним и работает сразу —
+    поэтому она есть и в /start, и в /status.
+    """
+    url = config.webapp_url()
+    if not url:
+        return None
+    return {"inline_keyboard": [[{"text": "🚀 Открыть приложение",
+                                  "web_app": {"url": url}}]]}
+
+
 def bot_mention() -> str:
     username = (state.bot_user or {}).get("username")
     return f"@{username}" if username else "юзернейм бота"
@@ -150,12 +164,18 @@ async def cmd_start(api, message: dict, _args: str) -> None:
     await state.remember_user(user_id, name=parse.display_name(user),
                               chat_id=chat_id)
 
+    # Заодно перевыставляем меню: если при старте вызов не прошёл (сеть,
+    # лимит), другого повода повторить его просто не будет.
+    await publish_menu(api)
+
     if connected(user_id):
         await api.send_message(chat_id, WELCOME + help_text(user_id)
-                               + owner_id_hint(user_id))
+                               + owner_id_hint(user_id),
+                               reply_markup=webapp_keyboard())
         return
     await api.send_message(chat_id, WELCOME + connect_steps(user_id)
-                           + ALREADY_LINKED_HINT + owner_id_hint(user_id))
+                           + ALREADY_LINKED_HINT + owner_id_hint(user_id),
+                           reply_markup=webapp_keyboard())
 
 
 async def cmd_connect(api, message: dict, _args: str) -> None:
@@ -225,6 +245,11 @@ async def cmd_status(api, message: dict, _args: str) -> None:
     if stats["intercepted"]:
         lines.append(f"🔒 Перехвачено: **{stats['intercepted']}** — /intercepted")
 
+    lines.append("")
+    why = config.webapp_why()
+    lines.append("📱 Приложение: **открывается кнопкой ниже**" if not why
+                 else f"📱 Приложение недоступно: {why}")
+
     if state.is_admin(user_id):
         lines += ["", "— — —",
                   f"👥 пользователей: {stats['users']}",
@@ -232,7 +257,10 @@ async def cmd_status(api, message: dict, _args: str) -> None:
                   f"⏱ бот на связи: {fmt.uptime(time.time() - state.start_time)}"]
         if state.client is not None:
             lines.append("👤 юзербот-режим активен: работают и групповые чаты")
-    await api.send_message(chat_id, "\n".join(lines))
+        if not why:
+            lines.append(f"🔗 {config.webapp_url()}")
+    await api.send_message(chat_id, "\n".join(lines),
+                           reply_markup=webapp_keyboard())
 
 
 async def cmd_urgent(api, message: dict, args: str) -> None:

@@ -2,13 +2,15 @@
 # Секреты (sync: false) задаются один раз в UI и не попадают в git.
 # WEBHOOK_URL указывать не нужно: подхватится RENDER_EXTERNAL_URL, и бот сам
 # переключится с long polling на вебхук.
+# Ветка должна совпадать с той, что реально в репозитории: Blueprint
+# молча ничего не задеплоит, если такой ветки нет.
 services:
   - type: web
     name: tg-guard
     runtime: docker
     plan: free
     region: frankfurt
-    branch: main
+    branch: claude/nifty-gates-lsaop5
     autoDeploy: true
     healthCheckPath: /health
     envVars:

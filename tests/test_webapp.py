@@ -298,3 +298,55 @@ def test_the_page_never_offers_more_than_the_api_allows():
     status, body = call("state", {}, init=sign())
     assert status == 200
     assert {kind["key"] for kind in body["kinds"]} <= set(db.PURGEABLE)
+
+
+# ----------------------------------------------- запасной вход в приложение -
+
+def start(monkeypatch, url="https://guard.example.com"):
+    from bot import commands
+
+    monkeypatch.setattr(config, "WEBHOOK_URL", url)
+    asyncio.run(commands.handle(state.api, {
+        "message_id": 1, "date": int(time.time()),
+        "chat": {"id": OWNER, "type": "private"},
+        "from": {"id": OWNER, "first_name": "Я"}, "text": "/start"}))
+    return state.api
+
+
+def test_start_carries_a_button_that_the_client_cannot_cache(monkeypatch):
+    """Синюю кнопку клиент кэширует, кнопку в сообщении — нет."""
+    api = start(monkeypatch)
+    button = api.markups[-1]["inline_keyboard"][0][0]
+    assert button["web_app"]["url"] == "https://guard.example.com/app"
+
+
+def test_start_reapplies_the_menu_button(monkeypatch):
+    """Если при старте вызов не прошёл, другого повода повторить его нет."""
+    api = start(monkeypatch)
+    assert api.menu_button["type"] == "web_app"
+
+
+def test_without_an_app_there_is_no_button_at_all(monkeypatch):
+    api = start(monkeypatch, url="")
+    assert api.markups[-1] is None
+
+
+def test_status_says_why_the_app_is_unavailable(monkeypatch):
+    from bot import commands
+
+    monkeypatch.setattr(config, "WEBHOOK_URL", "http://insecure.example.com")
+    asyncio.run(commands.handle(state.api, {
+        "message_id": 2, "date": int(time.time()),
+        "chat": {"id": OWNER, "type": "private"},
+        "from": {"id": OWNER, "first_name": "Я"}, "text": "/status"}))
+    assert "не https" in state.api.texts[-1]
+
+
+@pytest.mark.parametrize("url,why", [
+    ("https://ok.example.com", ""),
+    ("", "нет публичного адреса"),
+    ("http://ok.example.com", "не https"),
+])
+def test_the_reason_is_named_precisely(monkeypatch, url, why):
+    monkeypatch.setattr(config, "WEBHOOK_URL", url)
+    assert why in config.webapp_why()
