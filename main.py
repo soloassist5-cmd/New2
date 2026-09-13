@@ -25,7 +25,7 @@ import db
 import web
 from bot import business, commands, poller
 from bot.api import BotAPI
-from core import backup, dispatcher, fmt, reporter, state
+from core import backup, dispatcher, fmt, reporter, state, uptime
 
 LOG_FILE = config.ROOT / "data" / "guard.log"
 
@@ -234,15 +234,23 @@ async def run() -> None:
 
     await announce_restart()
     log.info("режимы: %s", describe_modes())
-    await reporter.send_report(
-        state.admin_id() or state.userbot_owner(),
-        f"🛡 **Guard запущен**\n"
-        f"{describe_modes()}\n"
-        f"📡 транспорт: {'вебхук' if config.use_webhook() else 'long polling'}\n"
-        f"⌨️ префикс `{config.PREFIX}`\n"
-        f"🔇 мутов восстановлено: {len(state.mutes)}\n"
-        f"👥 пользователей: {len(state.owners())}"
-    )
+
+    start = await uptime.note_start()
+    if start["quiet"]:
+        log.info("перезапуск через %s после прошлого — отчёт не шлём "
+                 "(за сутки их %s)", fmt.human_delta(start["gap"]),
+                 start["per_day"])
+    else:
+        await reporter.send_report(
+            state.admin_id() or state.userbot_owner(),
+            f"🛡 **Guard запущен**\n"
+            f"{describe_modes()}\n"
+            f"📡 транспорт: {'вебхук' if config.use_webhook() else 'long polling'}\n"
+            f"⌨️ префикс `{config.PREFIX}`\n"
+            f"🔇 мутов восстановлено: {len(state.mutes)}\n"
+            f"👥 пользователей: {len(state.owners())}"
+            + uptime.note(start["per_day"])
+        )
     if api is not None:
         tasks.append(asyncio.create_task(warm_stickers(api)))
 

@@ -13,7 +13,7 @@ import time
 import config
 import db
 from bot import access, cleanup, digest, dossier, dotcmd, namelog, parse, transcript, urgent
-from core import backup, chatprefs, fmt, state
+from core import backup, chatprefs, fmt, state, uptime
 
 log = logging.getLogger("botcmd")
 
@@ -251,6 +251,13 @@ async def cmd_status(api, message: dict, _args: str) -> None:
     why = config.webapp_why()
     lines.append("📱 Приложение: **открывается кнопкой ниже**" if not why
                  else f"📱 Приложение недоступно: {why}")
+
+    starts = await uptime.starts_per_day()
+    if uptime.restless(starts):
+        # Владелец видит только «бот на связи» и не понимает, почему теряются
+        # свежие сообщения. Число перезапусков объясняет это одной строкой.
+        lines.append(f"♻️ Перезапусков за сутки: **{starts}** — сервис засыпает "
+                     f"и поднимается заново")
 
     if state.is_admin(user_id):
         lines += ["", "— — —",

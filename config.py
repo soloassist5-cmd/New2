@@ -111,6 +111,12 @@ BACKUP_SOON_SEC: int = _int("BACKUP_SOON_SEC", 60)
 RESTORE_ON_START: bool = _bool("RESTORE_ON_START", True)
 BACKUP_TAG = "#guard_backup"
 
+# Отчёт о запуске — только если прошлый был давно: на бесплатном хостинге
+# процесс поднимается заново по десятку раз в день, и каждое такое сообщение
+# превращает личку с ботом в ленту перезапусков.
+STARTUP_QUIET_SEC: int = _int("STARTUP_QUIET_SEC", 6 * 3600)
+RESTART_ALERT: int = _int("RESTART_ALERT", 6)   # столько за сутки — уже симптом
+
 PORT: int = _int("PORT", 8080)
 
 # Публичный адрес сервиса. Если задан — бот работает через вебхук вместо
