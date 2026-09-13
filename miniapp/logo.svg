@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img"
+     aria-label="Guard">
+  <defs>
+    <linearGradient id="g-sky" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#A7DCFF"/>
+      <stop offset="0.55" stop-color="#4FA3E3"/>
+      <stop offset="1" stop-color="#1F63AE"/>
+    </linearGradient>
+    <linearGradient id="g-gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFEFAF"/>
+      <stop offset="0.45" stop-color="#F3C551"/>
+      <stop offset="1" stop-color="#BE8A22"/>
+    </linearGradient>
+    <linearGradient id="g-shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Щит: небо внутри, золотая кайма снаружи. -->
+  <path d="M32 3.5 57 12v18.2C57 44.6 46.2 55.9 32 60.5 17.8 55.9 7 44.6 7 30.2V12z"
+        fill="url(#g-sky)" stroke="url(#g-gold)" stroke-width="3.2"
+        stroke-linejoin="round"/>
+  <!-- Блик сверху: без него щит читается плоской заливкой. -->
+  <path d="M32 6.6 54 14.1v9.6C46.4 19.4 39.3 17.3 32 17.3S17.6 19.4 10 23.7v-9.6z"
+        fill="url(#g-shine)"/>
+
+  <!-- Искра — четыре луча, вытянутые по вертикали: так она читается даже в 16px. -->
+  <path d="M32 17.5c1.6 6.9 3.8 10.2 9.9 12.4-6.1 2.2-8.3 5.5-9.9 12.4-1.6-6.9-3.8-10.2-9.9-12.4
+           6.1-2.2 8.3-5.5 9.9-12.4z"
+        fill="url(#g-gold)"/>
+  <circle cx="32" cy="48.6" r="2.6" fill="url(#g-gold)"/>
+</svg>

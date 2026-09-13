@@ -140,10 +140,24 @@ async def listing(owner_id: int, what: str, limit: int) -> list[dict]:
 async def act(owner_id: int, action: str, payload: dict) -> dict:
     """Действия страницы. owner_id приходит из подписи, а не из тела запроса."""
     if action == "dnd":
+        # Переключатель в приложении — то же самое, что /gmute, и отчитываться
+        # должен так же: владелец закрыл приложение, а в чате должно остаться
+        # чем именно бот теперь отвечает собеседникам и как это выключить.
+        from bot import dotcmd
+        from core import reporter
+
         if payload.get("on"):
+            if state.dnd_active(owner_id):
+                return {"dnd": True}
             await state.set_dnd(owner_id)
+            await reporter.send_report(owner_id, dotcmd.dnd_enabled_text())
         else:
+            if not state.dnd_active(owner_id):
+                return {"dnd": False}
+            since = state.dnd_since(owner_id)
             await state.clear_dnd(owner_id)
+            await reporter.send_report(owner_id, dotcmd.dnd_disabled_text(since))
+            await dotcmd.dnd_digest(owner_id, since)
         return {"dnd": state.dnd_active(owner_id)}
 
     if action == "unmute":

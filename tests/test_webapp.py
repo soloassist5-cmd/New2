@@ -198,6 +198,35 @@ def test_dnd_can_be_switched_from_the_page():
     assert body["dnd"] is False and not state.dnd_active(OWNER)
 
 
+def test_switching_dnd_from_the_page_is_announced_in_the_chat():
+    """Владелец закрыл приложение — в чате должно остаться, что режим включён."""
+    call("act", {"action": "dnd", "on": True}, init=sign())
+    said = state.api.texts_to(OWNER)
+    assert said and "включён" in said[-1]
+    assert "ungmute" in said[-1], "и как его выключить"
+
+
+def test_turning_dnd_off_from_the_page_reports_and_sums_up():
+    asyncio.run(state.set_dnd(OWNER))
+    asyncio.run(db.add_intercepted(
+        {"owner_id": OWNER, "chat_id": PEER, "msg_id": 1, "user_id": PEER,
+         "user_name": "Вася", "text": "ты тут?", "date": db.now()}, "dnd"))
+    state.api.sent.clear()
+
+    call("act", {"action": "dnd", "on": False}, init=sign())
+    assert any("выключен" in text for text in state.api.texts_to(OWNER))
+    assert state.api.files, "и сводка «пока вас не беспокоили»"
+
+
+def test_switching_dnd_to_the_same_state_says_nothing_twice():
+    """Приложение могло переоткрыться — второе «включён» было бы враньём."""
+    call("act", {"action": "dnd", "on": True}, init=sign())
+    state.api.sent.clear()
+    status, body = call("act", {"action": "dnd", "on": True}, init=sign())
+    assert status == 200 and body["dnd"] is True
+    assert state.api.texts_to(OWNER) == []
+
+
 def test_mute_can_be_lifted_from_the_page():
     asyncio.run(state.mute_user(OWNER, PEER, PEER, 0))
     call("act", {"action": "unmute", "user_id": PEER, "chat_id": PEER},
@@ -279,6 +308,47 @@ def test_the_page_is_served_and_looks_like_the_app():
     assert "telegram-web-app.js" in body, "без него нет ни темы, ни initData"
     assert "X-Init-Data" in body, "страница обязана подписываться"
     assert "/app/api/" in body
+
+
+class Asset:
+    def __init__(self, name):
+        self.match_info = {"name": name}
+
+
+def test_the_logo_is_served():
+    response = asyncio.run(web._asset(Asset("logo.svg")))
+    assert response.status == 200
+    assert response.content_type == "image/svg+xml"
+    assert b"<svg" in response.body
+
+
+@pytest.mark.parametrize("name", [
+    "нет.svg", "../config.py", "index.html", "../../etc/passwd",
+])
+def test_only_listed_assets_are_served(name):
+    """Раздаём поимённо: каталог целиком наружу отдавать незачем."""
+    assert asyncio.run(web._asset(Asset(name))).status == 404
+
+
+def test_assets_are_linked_absolutely():
+    """Страница живёт на /app без слеша: относительный путь уедет в корень."""
+    body = asyncio.run(web._page(Request("page"))).text
+    assert 'src="/app/logo.svg"' in body
+    assert 'src="logo.svg"' not in body
+
+
+def test_the_page_avoids_css_the_telegram_webview_may_not_know():
+    """color-mix есть не везде: незакрашенный фон выглядит как поломка."""
+    body = asyncio.run(web._page(Request("page"))).text
+    # Со скобкой: само слово встречается в комментарии, объясняющем запрет.
+    assert "color-mix(" not in body
+
+
+def test_tabs_do_not_need_horizontal_scrolling():
+    """Лента обрезалась по краям экрана — вкладки разложены сеткой."""
+    body = asyncio.run(web._page(Request("page"))).text
+    tabs = body[body.index(".tabs {"):body.index(".tab {")]
+    assert "grid" in tabs and "overflow-x" not in tabs
 
 
 def test_clear_all_is_accepted_from_the_page():

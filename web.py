@@ -19,7 +19,11 @@ log = logging.getLogger("web")
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 INIT_HEADER = "X-Init-Data"
-PAGE = config.ROOT / "miniapp" / "index.html"
+APP_DIR = config.ROOT / "miniapp"
+PAGE = APP_DIR / "index.html"
+# Отдаём поимённо: каталог целиком раздавать незачем, а список — это ещё и
+# гарантия, что мимо не уедет что-то лишнее.
+ASSETS = {"logo.svg": "image/svg+xml"}
 
 
 async def _status(_request: web.Request) -> web.Response:
@@ -70,6 +74,20 @@ async def _page(_request: web.Request) -> web.Response:
                         headers={"Cache-Control": "no-cache"})
 
 
+async def _asset(request: web.Request) -> web.Response:
+    """Картинки страницы. Только те, что перечислены в ASSETS."""
+    name = request.match_info["name"]
+    kind = ASSETS.get(name)
+    if kind is None:
+        return web.Response(status=404, text="not found")
+    try:
+        body = (APP_DIR / name).read_bytes()
+    except OSError:
+        return web.Response(status=404, text="not found")
+    return web.Response(body=body, content_type=kind,
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
 async def _api(request: web.Request) -> web.Response:
     """Всё, что делает страница. Кто зашёл — только из подписи Telegram."""
     from bot import webapp
@@ -117,6 +135,7 @@ async def start() -> web.AppRunner | None:
         app.router.add_post(config.webhook_path(), _webhook)
     if config.webapp_url():
         app.router.add_get(config.WEBAPP_PATH, _page)
+        app.router.add_get(config.WEBAPP_PATH + "/{name:[\\w.-]+\\.svg}", _asset)
         app.router.add_post(config.WEBAPP_PATH + "/api/{what}", _api)
     runner = web.AppRunner(app)
     await runner.setup()
