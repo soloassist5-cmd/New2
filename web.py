@@ -18,6 +18,8 @@ from core import state
 log = logging.getLogger("web")
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+INIT_HEADER = "X-Init-Data"
+PAGE = config.ROOT / "miniapp" / "index.html"
 
 
 async def _status(_request: web.Request) -> web.Response:
@@ -55,6 +57,56 @@ async def _webhook(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+# ------------------------------------------------------------------ Mini App --
+
+async def _page(_request: web.Request) -> web.Response:
+    """Сама страница. Открывается только внутри Telegram — там и проверка."""
+    try:
+        body = PAGE.read_text(encoding="utf-8")
+    except OSError as e:
+        log.error("страница приложения не читается: %r", e)
+        return web.Response(status=500, text="no page")
+    return web.Response(text=body, content_type="text/html", charset="utf-8",
+                        headers={"Cache-Control": "no-cache"})
+
+
+async def _api(request: web.Request) -> web.Response:
+    """Всё, что делает страница. Кто зашёл — только из подписи Telegram."""
+    from bot import webapp
+
+    try:
+        owner_id, _ = await webapp.owner_of(request.headers.get(INIT_HEADER, ""))
+    except webapp.Denied as e:
+        # Наружу — только код: по разнице формулировок удобно подбирать подпись.
+        log.info("приложение: отказ (%s) от %s", e, request.remote)
+        return web.json_response({"error": "denied"}, status=e.status)
+
+    try:
+        payload = await request.json() if request.can_read_body else {}
+    except Exception:                                        # noqa: BLE001
+        return web.json_response({"error": "bad json"}, status=400)
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "bad json"}, status=400)
+
+    what = request.match_info["what"]
+    try:
+        if what == "state":
+            return web.json_response(await webapp.snapshot(owner_id))
+        if what == "list":
+            items = await webapp.listing(owner_id, payload.get("what", ""),
+                                         payload.get("limit", 20))
+            return web.json_response({"items": items})
+        if what == "act":
+            return web.json_response(
+                await webapp.act(owner_id, payload.get("action", ""), payload))
+    except webapp.Denied as e:
+        return web.json_response({"error": "denied"}, status=e.status)
+    except Exception:                                        # noqa: BLE001
+        log.exception("приложение: %s не отработало", what)
+        return web.json_response({"error": "failed"}, status=500)
+    return web.json_response({"error": "unknown"}, status=404)
+
+
 async def start() -> web.AppRunner | None:
     if not config.PORT:
         return None
@@ -63,6 +115,9 @@ async def start() -> web.AppRunner | None:
     app.router.add_get("/health", _status)
     if config.use_webhook():
         app.router.add_post(config.webhook_path(), _webhook)
+    if config.webapp_url():
+        app.router.add_get(config.WEBAPP_PATH, _page)
+        app.router.add_post(config.WEBAPP_PATH + "/api/{what}", _api)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", config.PORT)

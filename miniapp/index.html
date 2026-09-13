@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guard</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #17212b);
+    --card: var(--tg-theme-secondary-bg-color, #232e3c);
+    --text: var(--tg-theme-text-color, #f5f5f5);
+    --hint: var(--tg-theme-hint-color, #8b9aa8);
+    --link: var(--tg-theme-link-color, #62a3e0);
+    --accent: var(--tg-theme-button-color, #3390ec);
+    --on-accent: var(--tg-theme-button-text-color, #fff);
+    --danger: #e4574a;
+    --ok: #4bb34b;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 12px 12px 32px;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 19px; margin: 4px 0 14px; }
+  .muted { color: var(--hint); }
+  .small { font-size: 13px; }
+
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    padding: 14px; margin-bottom: 10px;
+  }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row + .row { margin-top: 10px; }
+  .grow { flex: 1; min-width: 0; }
+
+  .switch { position: relative; width: 48px; height: 28px; flex: none; }
+  .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; }
+  .track {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: color-mix(in srgb, var(--hint) 45%, transparent);
+    transition: background .18s; pointer-events: none;
+  }
+  .track::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #fff; transition: transform .18s;
+  }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { transform: translateX(20px); }
+
+  .stats { display: grid; gap: 8px;
+           grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); }
+  .stat {
+    background: var(--card); border-radius: var(--radius);
+    padding: 12px 10px; text-align: center;
+  }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--hint); }
+
+  .tabs { display: flex; gap: 6px; overflow-x: auto; margin: 14px 0 10px;
+          scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: none; padding: 7px 13px; border-radius: 999px; font-size: 14px;
+    background: var(--card); color: var(--text); border: 0; cursor: pointer;
+  }
+  .tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+
+  .item { padding: 11px 0; border-bottom: 1px solid rgba(127,127,127,.18); }
+  .item:last-child { border-bottom: 0; }
+  .item .who { font-weight: 600; }
+  .item .when { float: right; font-size: 12px; color: var(--hint); }
+  .item .body { margin-top: 3px; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+  button.act {
+    border: 0; border-radius: 10px; padding: 9px 12px; font-size: 14px;
+    background: var(--accent); color: var(--on-accent); cursor: pointer;
+  }
+  button.act.ghost { background: color-mix(in srgb, var(--hint) 22%, transparent);
+                     color: var(--text); }
+  button.act.danger { background: var(--danger); color: #fff; }
+  button.act[disabled] { opacity: .5; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+          font-size: 12px; background: color-mix(in srgb, var(--hint) 22%, transparent); }
+  .pill.on { background: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .pill.off { background: color-mix(in srgb, var(--danger) 30%, transparent); }
+  .empty { color: var(--hint); text-align: center; padding: 22px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<h1>🛡 Guard</h1>
+
+<div id="boot" class="card empty">Загружаю…</div>
+
+<main id="app" class="hidden">
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <div><b>Не беспокоить</b></div>
+        <div class="small muted" id="dndHint">сообщения от всех удаляются сразу</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="dnd">
+        <span class="track"></span>
+      </label>
+    </div>
+    <div class="row small" id="link"></div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="card" id="panel"></div>
+</main>
+
+<script>
+const tg = window.Telegram?.WebApp;
+const $ = (id) => document.getElementById(id);
+let snap = null;
+
+tg?.ready();
+tg?.expand();
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Init-Data": tg?.initData || "",
+    },
+    body: JSON.stringify(body || {}),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+  return res.json();
+}
+
+const buzz = (kind) => tg?.HapticFeedback?.notificationOccurred?.(kind);
+
+function when(unix) {
+  if (!unix) return "";
+  const d = new Date(unix * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function node(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function item(who, stamp, body) {
+  const box = node("div", "item");
+  const head = node("div");
+  head.append(node("span", "when", when(stamp)), node("span", "who", who || "—"));
+  box.append(head, node("div", "body", body || "—"));
+  return box;
+}
+
+// ------------------------------------------------------------------ экран --
+
+function paintHead() {
+  $("dnd").checked = snap.dnd;
+  $("dndHint").textContent = snap.dnd
+    ? "включён — входящие удаляются сразу"
+    : "выключен — сообщения доходят как обычно";
+
+  const link = $("link");
+  link.replaceChildren();
+  const pill = node("span", "pill " + (snap.connected ? "on" : "off"),
+    snap.connected ? "личные чаты подключены" : "личные чаты не подключены");
+  link.append(pill);
+  if (!snap.connected) {
+    link.append(node("span", "muted", " отправьте боту /connect"));
+  }
+
+  // «В памяти» намеренно нет: это кэш, и он живёт во вкладке «Чистка».
+  const labels = [
+    ["deleted", "удалённых"], ["intercepted", "перехвачено"],
+    ["edits", "правок"], ["mutes", "мутов"],
+  ];
+  $("stats").replaceChildren(...labels.map(([key, name]) => {
+    const box = node("div", "stat");
+    box.append(node("b", null, snap.stats[key] ?? 0), node("span", null, name));
+    return box;
+  }));
+}
+
+const TABS = [
+  ["deleted", "🗑 Удалённые"],
+  ["intercepted", "🔇 Перехваченное"],
+  ["urgent", "🚨 Вызовы"],
+  ["mutes", "🔕 Муты"],
+  ["allowed", "✅ Белый список"],
+  ["clean", "🧹 Чистка"],
+];
+
+let active = "deleted";
+
+function paintTabs() {
+  $("tabs").replaceChildren(...TABS.map(([key, name]) => {
+    const b = node("button", "tab", name);
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(key === active));
+    b.onclick = () => { active = key; paintTabs(); paintPanel(); };
+    return b;
+  }));
+}
+
+async function paintPanel() {
+  const panel = $("panel");
+  panel.replaceChildren(node("div", "empty", "Загружаю…"));
+  try {
+    if (active === "clean") return paintClean(panel);
+    const rows = await api("/app/api/list", { what: active, limit: 30 });
+    if (!rows.items.length) {
+      panel.replaceChildren(node("div", "empty", "Пусто."));
+      return;
+    }
+    panel.replaceChildren(...rows.items.map(render[active]));
+  } catch (e) {
+    panel.replaceChildren(node("div", "empty", "Не вышло: " + e.message));
+  }
+}
+
+const render = {
+  deleted: (r) => item(r.user_name, r.deleted_at,
+    r.text || (r.media_type ? `<${r.media_type}>` : "—")),
+  intercepted: (r) => item(r.user_name, r.date,
+    (r.reason === "dnd" ? "🌙 " : "🔇 ") +
+    (r.text || (r.media_type ? `<${r.media_type}>` : "—"))),
+  urgent: (r) => item(r.user_name, r.at, r.reason || "без пояснения"),
+  mutes: (r) => {
+    const box = item(String(r.user_id), r.created_at,
+      r.until ? "до " + when(r.until) : "бессрочно" +
+      (r.reason ? " · " + r.reason : ""));
+    const btn = node("button", "act ghost", "Снять");
+    btn.style.marginTop = "8px";
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await api("/app/api/act", { action: "unmute", user_id: r.user_id,
+                                  chat_id: r.chat_id });
+      buzz("success");
+      refresh();
+    };
+    box.append(btn);
+    return box;
+  },
+  allowed: (r) => {
+    const box = item(r.name || String(r.user_id), r.added_at, "id " + r.user_id);
+    const btn = node("button", "act ghost", "Убрать");
+    btn.style.marginTop = "8px";
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await api("/app/api/act", { action: "deny", user_id: r.user_id });
+      buzz("success");
+      paintPanel();
+    };
+    box.append(btn);
+    return box;
+  },
+};
+
+function paintClean(panel) {
+  const rows = snap.kinds
+    .map((kind) => [kind, snap.counts[kind.key] || 0])
+    .filter(([, total]) => total > 0);
+
+  if (!rows.length) {
+    panel.replaceChildren(node("div", "empty", "Чистить нечего."));
+    return;
+  }
+
+  const blocks = rows.map(([kind, total]) => {
+    const box = node("div", "item");
+    const line = node("div", "row");
+    const left = node("div", "grow");
+    left.append(node("div", null, `${kind.icon} ${kind.name} — ${total}`),
+                node("div", "small muted", kind.hint));
+    const btn = node("button", "act danger", "Очистить");
+    btn.onclick = () => wipe(kind, total, btn);
+    line.append(left, btn);
+    box.append(line);
+    return box;
+  });
+
+  const total = rows.reduce((sum, [, n]) => sum + n, 0);
+  const all = node("div", "item");
+  const line = node("div", "row");
+  const btn = node("button", "act danger", `🧨 Всё сразу — ${total}`);
+  btn.style.width = "100%";
+  btn.onclick = () => wipe({ key: "*", name: "всё сразу" }, total, btn);
+  line.append(btn);
+  all.append(line);
+
+  panel.replaceChildren(...blocks, all);
+}
+
+function wipe(kind, total, btn) {
+  const ask = `Удалить безвозвратно: ${kind.name} — ${total}?`;
+  const run = async () => {
+    btn.disabled = true;
+    const res = await api("/app/api/act", { action: "clear", kind: kind.key });
+    buzz("success");
+    tg?.showAlert?.(`Удалено: ${res.removed}`);
+    refresh();
+  };
+  if (tg?.showConfirm) tg.showConfirm(ask, (yes) => { if (yes) run(); });
+  else if (confirm(ask)) run();
+}
+
+// ------------------------------------------------------------- запуск -----
+
+$("dnd").onchange = async (e) => {
+  const on = e.target.checked;
+  e.target.disabled = true;
+  try {
+    const res = await api("/app/api/act", { action: "dnd", on });
+    snap.dnd = res.dnd;
+    buzz("success");
+  } catch (err) {
+    e.target.checked = !on;
+    buzz("error");
+    tg?.showAlert?.("Не вышло: " + err.message);
+  } finally {
+    e.target.disabled = false;
+    paintHead();
+  }
+};
+
+async function refresh() {
+  snap = await api("/app/api/state");
+  paintHead();
+  paintPanel();
+}
+
+(async () => {
+  try {
+    await refresh();
+    paintTabs();
+    $("boot").classList.add("hidden");
+    $("app").classList.remove("hidden");
+  } catch (e) {
+    $("boot").textContent = e.message === "403"
+      ? "Доступ к боту не открыт. Напишите ему /start."
+      : "Не удалось загрузить: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>

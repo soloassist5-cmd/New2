@@ -209,6 +209,9 @@ class BotAPI:
     async def delete_message(self, chat_id: int, message_id: int) -> bool:
         return await self.call("deleteMessage", chat_id=chat_id, message_id=message_id)
 
+    async def set_chat_menu_button(self, menu_button: dict) -> bool:
+        return await self.call("setChatMenuButton", menu_button=menu_button)
+
     async def set_my_commands(self, commands: list[dict]) -> bool:
         return await self.call("setMyCommands", commands=commands)
 

@@ -142,6 +142,21 @@ def use_webhook() -> bool:
     return bool(BOT_TOKEN and WEBHOOK_URL)
 
 
+# Mini App — страница, которая открывается прямо в Telegram по синей кнопке.
+# Нужен публичный https-адрес: внутрь Telegram по http её не пустит.
+WEBAPP_PATH = "/app"
+WEBAPP: bool = _bool("WEBAPP", True)
+
+
+def webapp_url() -> str:
+    """Адрес страницы или пусто, если открывать нечего."""
+    if not (WEBAPP and BOT_TOKEN and WEBHOOK_URL):
+        return ""
+    if not WEBHOOK_URL.startswith("https://"):
+        return ""
+    return WEBHOOK_URL.rstrip("/") + WEBAPP_PATH
+
+
 
 def report_via_bot() -> bool:
     return bool(BOT_TOKEN)

@@ -12,6 +12,7 @@ class FakeBotAPI:
         self.files: list[tuple[int, str]] = []
         self.deleted: list[tuple[str, list[int]]] = []
         self.commands: list[dict] | None = None
+        self.menu_button: dict | None = None
         self.delete_ok = delete_ok
         self.downloads: dict[str, bytes] = {}
         self.uploads: list[bytes] = []
@@ -91,6 +92,10 @@ class FakeBotAPI:
     async def send_dice(self, chat_id, emoji, *, business_connection_id=None):
         self.dice.append((chat_id, emoji, business_connection_id))
         return {"message_id": next(self._ids)}
+
+    async def set_chat_menu_button(self, menu_button):
+        self.menu_button = menu_button
+        return True
 
     async def set_my_commands(self, commands):
         self.commands = commands

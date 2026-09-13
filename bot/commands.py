@@ -666,3 +666,15 @@ async def publish_menu(api) -> None:
                                    for name, desc in MENU])
     except Exception as e:                                   # noqa: BLE001
         log.debug("меню команд не обновилось: %r", e)
+
+    # Синяя кнопка слева от поля ввода: либо открывает приложение, либо, если
+    # открывать нечего, возвращается к обычному списку команд — иначе на ней
+    # осталась бы ссылка от прошлой версии.
+    url = config.webapp_url()
+    button = ({"type": "web_app", "text": "Guard", "web_app": {"url": url}}
+              if url else {"type": "commands"})
+    try:
+        await api.set_chat_menu_button(button)
+        log.info("кнопка меню: %s", url or "список команд")
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("кнопку меню не удалось выставить: %r", e)
