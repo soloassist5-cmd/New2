@@ -635,6 +635,27 @@ async def aliases(owner_id: int, user_id: int, limit: int = 10):
         "ORDER BY first_seen DESC, id DESC LIMIT ?", (owner_id, user_id, limit))
 
 
+async def renames(owner_id: int, limit: int = 30):
+    """Кто менял имя — по всем сразу, свежее первым.
+
+    Первая запись про человека — это не переименование, а знакомство, поэтому
+    в выборку попадают только те, у кого записей больше одной.
+    """
+    return await fetchall(
+        """SELECT a.* FROM aliases a
+            WHERE a.owner_id = ?
+              AND (SELECT COUNT(*) FROM aliases b
+                    WHERE b.owner_id = a.owner_id AND b.user_id = a.user_id) > 1
+            ORDER BY a.user_id, a.first_seen, a.id""", (owner_id,))
+
+
+async def renamed_count(owner_id: int) -> int:
+    return await scalar(
+        """SELECT COUNT(*) FROM (
+               SELECT user_id FROM aliases WHERE owner_id=?
+                GROUP BY user_id HAVING COUNT(*) > 1)""", (owner_id,))
+
+
 async def message_times(owner_id: int, user_id: int, limit: int = 5000):
     """Когда человек писал — для портрета активности. Только даты, без текста.
 

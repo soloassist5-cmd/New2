@@ -503,6 +503,18 @@ async def cmd_dox(ctx: BizCtx) -> None:
                                          chat_id=ctx.chat_id))
 
 
+@bizcmd("names", args="[reply|id]", cat="Инфо", aliases=["history", "имена"],
+        desc="история имён: как человека звали раньше")
+async def cmd_names(ctx: BizCtx) -> None:
+    from bot import namelog
+
+    user_id, _, _ = await ctx.target()
+    if user_id is None:
+        await ctx.fail("Про кого? Ответьте на сообщение или `.names <id>`.")
+        return
+    await ctx.private(await namelog.one(ctx.owner_id, user_id))
+
+
 @bizcmd("ping", desc="проверить, что бот жив", cat="Инфо")
 async def cmd_ping(ctx: BizCtx) -> None:
     started = time.perf_counter()

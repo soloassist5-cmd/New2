@@ -253,7 +253,10 @@ async def run() -> None:
             await stop.wait()
     finally:
         stop.set()
-        backup.forget_soon()
+        # Не отменяем запланированную копию, а дожидаемся её: иначе чистка или
+        # правка настроек за минуту до остановки просто пропадут.
+        with contextlib.suppress(Exception):
+            await backup.flush_soon()
         if api is not None:
             # Успеть разобрать удаления, зависшие в окне ожидания.
             with contextlib.suppress(Exception):

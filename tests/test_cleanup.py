@@ -174,19 +174,46 @@ def test_chat_scope_keeps_the_other_chats():
     assert [row["chat_id"] for row in rows] == [MARINA]
 
 
-def test_clearing_asks_for_a_backup_so_it_does_not_come_back():
-    """Диск на хостинге временный: без копии чистка откатится при восстановлении."""
+def test_clearing_saves_a_backup_at_once_not_in_a_minute():
+    """Отложенная копия не переживёт остановки, и почищенное вернётся обратно."""
     from core import backup
 
     put(VASYA)
-    calls = []
-    real = backup.request_soon
+    now, later = [], []
+    real_now, real_later = backup.save_now, backup.request_soon
+
+    async def fake_now():
+        now.append(1)
+        return True
+
     try:
-        backup.request_soon = lambda: calls.append(1)
+        backup.save_now = fake_now
+        backup.request_soon = lambda: later.append(1)
         press(f"cl:i:a:0:{OWNER}")
     finally:
-        backup.request_soon = real
-    assert calls, "после чистки копию базы надо обновить"
+        backup.save_now, backup.request_soon = real_now, real_later
+
+    assert now, "после чистки копия должна уйти сразу"
+    assert not later, "откладывать её нельзя"
+
+
+def test_nothing_removed_means_no_backup():
+    """Пустая чистка — не повод гонять базу в чат."""
+    from core import backup
+
+    calls = []
+    real = backup.save_now
+
+    async def fake():
+        calls.append(1)
+        return True
+
+    try:
+        backup.save_now = fake
+        press(f"cl:i:a:0:{OWNER}")
+    finally:
+        backup.save_now = real
+    assert not calls
 
 
 # ------------------------------------------------------- из самой переписки -

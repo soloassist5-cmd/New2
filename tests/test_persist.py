@@ -150,3 +150,81 @@ def test_settings_survive_a_full_redeploy():
         assert state.is_allowed(OWNER, PEER), "белый список вернулся"
         assert (await chatprefs.flags(OWNER, 42, True))["ignored"] is True
     asyncio.run(scenario())
+
+
+# ------------------------------------------- копия при остановке процесса ---
+
+def test_a_scheduled_backup_is_finished_on_shutdown():
+    """Отменить её значило бы выбросить правку, сделанную минуту назад."""
+    from core import backup
+
+    async def scenario():
+        done = []
+        real = backup.upload
+
+        async def fake_upload():
+            done.append(1)
+            return True
+
+        backup.upload = fake_upload
+        try:
+            config.BACKUP_EVERY_MIN = 30
+            config.BACKUP_SOON_SEC = 60          # сама бы ушла через минуту
+            backup.request_soon()
+            await backup.flush_soon()            # а процесс гасят сейчас
+        finally:
+            backup.upload = real
+            backup.forget_soon()
+        return done
+
+    assert asyncio.run(scenario()), "копия при остановке должна успеть уйти"
+
+
+def test_flush_is_quiet_when_nothing_was_scheduled():
+    from core import backup
+
+    async def scenario():
+        calls = []
+        real = backup.upload
+
+        async def fake_upload():
+            calls.append(1)
+            return True
+
+        backup.upload = fake_upload
+        try:
+            backup.forget_soon()
+            await backup.flush_soon()
+        finally:
+            backup.upload = real
+        return calls
+
+    assert asyncio.run(scenario()) == []
+
+
+def test_save_now_does_not_wait_and_drops_the_scheduled_one():
+    from core import backup
+
+    async def scenario():
+        calls = []
+        real = backup.upload
+
+        async def fake_upload():
+            calls.append(1)
+            return True
+
+        backup.upload = fake_upload
+        try:
+            config.BACKUP_EVERY_MIN = 30
+            config.BACKUP_SOON_SEC = 60
+            backup.request_soon()
+            await backup.save_now()
+            pending = backup._soon_task
+        finally:
+            backup.upload = real
+            backup.forget_soon()
+        return calls, pending
+
+    calls, pending = asyncio.run(scenario())
+    assert calls == [1], "ровно одна загрузка, без ожидания"
+    assert pending is None, "запланированная снимается — она уже не нужна"

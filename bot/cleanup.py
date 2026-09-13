@@ -153,7 +153,9 @@ async def apply(owner_id: int, code: str, scope: str, value: int) -> int:
         removed += await db.clear_kind(kind, owner_id, chat_id=chat_id,
                                        before=before)
     if removed:
-        backup.request_soon()
+        # Именно сразу: отложенная копия не переживёт остановки процесса, и
+        # после передеплоя почищенное вернулось бы из старого бэкапа.
+        await backup.save_now()
     log.info("владелец %s почистил %s (%s=%s): -%s", owner_id, code, scope,
              value, removed)
     return removed

@@ -12,7 +12,7 @@ import time
 
 import config
 import db
-from bot import access, cleanup, digest, dossier, dotcmd, parse, transcript, urgent
+from bot import access, cleanup, digest, dossier, dotcmd, namelog, parse, transcript, urgent
 from core import backup, chatprefs, fmt, state
 
 log = logging.getLogger("botcmd")
@@ -79,6 +79,7 @@ HELP = (
     "/clearnames, /clearcache\n"
     "/deleted [N] — последние удалённые\n"
     "/dox <id> — досье: всё, что я записал про человека\n"
+    "/names [id] — история имён: кто и когда переименовывался\n"
     "/chats — чаты, где вы меняли настройки\n"
     "/urgent — срочные вызовы от собеседников\n"
     "/find <текст> — поиск по всему сохранённому\n"
@@ -108,6 +109,7 @@ MENU = (
     ("clear", "что накопилось и что почистить"),
     ("deleted", "последние удалённые сообщения"),
     ("dox", "досье на человека: /dox <id>"),
+    ("names", "история имён: кто переименовывался"),
     ("chats", "чаты с изменёнными настройками"),
     ("urgent", "срочные вызовы от собеседников"),
     ("find", "поиск по сохранённому: /find текст"),
@@ -411,6 +413,17 @@ async def cmd_dox(api, message: dict, args: str) -> None:
     await api.send_message(chat_id, await dossier.card(api, owner_id, int(raw)))
 
 
+async def cmd_names(api, message: dict, args: str) -> None:
+    """Без аргумента — все, кто переименовывался; с id — один человек."""
+    chat_id = message["chat"]["id"]
+    owner_id = (message.get("from") or {}).get("id")
+    raw = args.strip()
+    if re.fullmatch(r"-?\d+", raw):
+        await api.send_message(chat_id, await namelog.one(owner_id, int(raw)))
+        return
+    await api.send_message(chat_id, await namelog.everyone(owner_id))
+
+
 async def cmd_find(api, message: dict, args: str) -> None:
     chat_id = message["chat"]["id"]
     owner_id = (message.get("from") or {}).get("id")
@@ -536,6 +549,8 @@ HANDLERS = {
     "clearcache": _cleaner("cache"),
     "dox": cmd_dox,
     "whois": cmd_dox,
+    "names": cmd_names,
+    "history": cmd_names,
     "deleted": cmd_deleted,
     "find": cmd_find,
     "export": cmd_export,
